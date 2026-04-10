@@ -1,12 +1,9 @@
 "use client"
 
 import Link from "next/link"
-import Image from "next/image"
 import { Brand } from "@/types/supabase"
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Button } from "@/components/ui/button"
-import { Building2, Sparkles, CheckCircle2, ArrowRight, Plus } from "lucide-react"
-import { formatDateShort } from "@/lib/utils"
+import { Sparkles, ArrowRight, Globe, FileDown, Wand2 } from "lucide-react"
 
 interface Props {
   stats: { brandCount: number; jobCount: number }
@@ -15,116 +12,70 @@ interface Props {
 
 export default function DashboardHome({ stats, recentBrands }: Props) {
   return (
-    <div className="space-y-8 animate-fade-in">
-      {/* Header */}
-      <div>
-        <h1 className="font-display text-3xl font-bold text-gold-gradient">
-          Booth Dashboard
+    <div className="space-y-10 animate-fade-in max-w-3xl">
+
+      {/* Hero */}
+      <div className="space-y-2">
+        <p className="text-xs font-semibold text-gold uppercase tracking-widest">IA.Agent — Booth Photo Paris</p>
+        <h1 className="text-4xl font-display font-bold text-foreground leading-tight">
+          Générez une présentation<br />
+          <span className="text-gold">en 60 secondes.</span>
         </h1>
-        <p className="text-muted-foreground mt-1 text-sm">
-          Génération de visuels et présentations de marque
+        <p className="text-muted-foreground">
+          Entrez le site d&apos;une marque — l&apos;IA récupère les couleurs, génère les visuels et produit le PPTX prêt à envoyer.
         </p>
       </div>
 
+      {/* Main CTA */}
+      <Button variant="gold" size="lg" asChild className="gap-2 text-base h-12 px-6">
+        <Link href="/generate">
+          <Sparkles className="w-5 h-5" />
+          Nouvelle présentation
+          <ArrowRight className="w-4 h-4" />
+        </Link>
+      </Button>
+
+      {/* How it works */}
+      <div className="space-y-3">
+        <p className="text-xs font-semibold text-muted-foreground uppercase tracking-widest">Comment ça marche</p>
+        <div className="grid grid-cols-3 gap-4">
+          {[
+            { icon: Globe, step: "1", label: "Site internet", desc: "Entrez le domaine de la marque" },
+            { icon: Wand2, step: "2", label: "Génération IA", desc: "6 visuels créés automatiquement" },
+            { icon: FileDown, step: "3", label: "Téléchargement", desc: "PPTX prêt à présenter" },
+          ].map(({ icon: Icon, step, label, desc }) => (
+            <div key={step} className="bg-card border border-border rounded-xl p-4 space-y-2">
+              <div className="flex items-center gap-2">
+                <span className="w-5 h-5 rounded-full bg-gold/20 text-gold text-[10px] font-bold flex items-center justify-center">
+                  {step}
+                </span>
+                <Icon className="w-4 h-4 text-gold" />
+              </div>
+              <p className="text-sm font-medium text-foreground">{label}</p>
+              <p className="text-xs text-muted-foreground">{desc}</p>
+            </div>
+          ))}
+        </div>
+      </div>
+
       {/* Stats */}
-      <div className="grid grid-cols-2 gap-4">
-        <Card className="border-gold/20 hover:border-gold/40 transition-colors">
-          <CardContent className="pt-6">
-            <div className="flex items-center justify-between">
-              <div>
-                <p className="text-muted-foreground text-xs uppercase tracking-widest mb-1">Marques</p>
-                <p className="text-3xl font-bold text-foreground">{stats.brandCount}</p>
-              </div>
-              <div className="w-12 h-12 rounded-xl bg-gold/10 border border-gold/20 flex items-center justify-center">
-                <Building2 className="w-5 h-5 text-gold" />
-              </div>
-            </div>
-          </CardContent>
-        </Card>
-
-        <Card className="border-emerald-500/20 hover:border-emerald-500/40 transition-colors">
-          <CardContent className="pt-6">
-            <div className="flex items-center justify-between">
-              <div>
-                <p className="text-muted-foreground text-xs uppercase tracking-widest mb-1">Générations</p>
-                <p className="text-3xl font-bold text-foreground">{stats.jobCount}</p>
-              </div>
-              <div className="w-12 h-12 rounded-xl bg-emerald-500/10 border border-emerald-500/20 flex items-center justify-center">
-                <CheckCircle2 className="w-5 h-5 text-emerald-400" />
-              </div>
-            </div>
-          </CardContent>
-        </Card>
-      </div>
-
-      {/* Quick actions */}
-      <div className="flex gap-3">
-        <Button variant="gold" asChild className="gap-2">
-          <Link href="/generate">
-            <Sparkles className="w-4 h-4" />
-            Nouvelle génération
-          </Link>
-        </Button>
-        <Button variant="outline" asChild className="gap-2">
-          <Link href="/brands/new">
-            <Plus className="w-4 h-4" />
-            Nouvelle marque
-          </Link>
-        </Button>
-      </div>
-
-      {/* Recent brands */}
-      <div>
-        <div className="flex items-center justify-between mb-4">
-          <h2 className="text-base font-semibold text-foreground">Marques récentes</h2>
-          <Link href="/brands" className="text-xs text-gold hover:text-gold-light flex items-center gap-1 transition-colors">
-            Voir toutes <ArrowRight className="w-3 h-3" />
+      {(stats.brandCount > 0 || stats.jobCount > 0) && (
+        <div className="flex gap-6 pt-2 border-t border-border">
+          <div>
+            <p className="text-2xl font-bold text-foreground">{stats.brandCount}</p>
+            <p className="text-xs text-muted-foreground">marque{stats.brandCount > 1 ? "s" : ""} enregistrée{stats.brandCount > 1 ? "s" : ""}</p>
+          </div>
+          <div className="w-px bg-border" />
+          <div>
+            <p className="text-2xl font-bold text-foreground">{stats.jobCount}</p>
+            <p className="text-xs text-muted-foreground">présentation{stats.jobCount > 1 ? "s" : ""} générée{stats.jobCount > 1 ? "s" : ""}</p>
+          </div>
+          <div className="flex-1" />
+          <Link href="/jobs" className="text-xs text-gold hover:text-gold-light self-center flex items-center gap-1 transition-colors">
+            Voir l&apos;historique <ArrowRight className="w-3 h-3" />
           </Link>
         </div>
-
-        {recentBrands.length === 0 ? (
-          <Card className="border-dashed">
-            <CardContent className="flex flex-col items-center justify-center py-12 text-center">
-              <Building2 className="w-10 h-10 text-muted-foreground/30 mb-3" />
-              <p className="text-muted-foreground text-sm">Aucune marque pour l&apos;instant</p>
-              <Button variant="outline" size="sm" asChild className="mt-4">
-                <Link href="/brands/new">Créer une marque</Link>
-              </Button>
-            </CardContent>
-          </Card>
-        ) : (
-          <div className="space-y-2">
-            {recentBrands.map((brand) => (
-              <Link key={brand.id} href={`/brands/${brand.id}`}>
-                <Card className="hover:border-gold/30 transition-all duration-200 cursor-pointer">
-                  <CardContent className="py-3 px-4">
-                    <div className="flex items-center gap-3">
-                      <div className="w-8 h-8 rounded-md bg-muted border border-border flex items-center justify-center overflow-hidden shrink-0">
-                        {brand.logo_url ? (
-                          <Image
-                            src={brand.logo_url}
-                            alt={brand.name}
-                            width={32}
-                            height={32}
-                            className="object-contain"
-                          />
-                        ) : (
-                          <Building2 className="w-4 h-4 text-muted-foreground" />
-                        )}
-                      </div>
-                      <div className="flex-1 min-w-0">
-                        <p className="text-sm font-medium text-foreground truncate">{brand.name}</p>
-                        <p className="text-xs text-muted-foreground">{formatDateShort(brand.created_at)}</p>
-                      </div>
-                      <ArrowRight className="w-4 h-4 text-muted-foreground shrink-0" />
-                    </div>
-                  </CardContent>
-                </Card>
-              </Link>
-            ))}
-          </div>
-        )}
-      </div>
+      )}
     </div>
   )
 }

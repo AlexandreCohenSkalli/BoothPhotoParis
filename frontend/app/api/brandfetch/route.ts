@@ -53,27 +53,44 @@ export async function GET(req: NextRequest) {
       }
     }
 
-    // Prefer: SVG logo > PNG icon > first available
+    // Prefer dark-theme PNG logo (visible on light backgrounds), then dark SVG, then any PNG, then fallback
     const bestLogo =
-      logos.find((l) => l.format === "svg" && l.type === "logo") ??
-      logos.find((l) => l.format === "png" && l.type === "icon") ??
+      logos.find((l) => l.format === "png" && l.type === "logo" && l.url?.includes("/dark/")) ??
+      logos.find((l) => l.format === "svg" && l.type === "logo" && l.url?.includes("/dark/")) ??
+      logos.find((l) => l.format === "png" && l.type === "logo") ??
+      logos.find((l) => l.format === "jpeg" && l.type === "icon") ??
       logos.find((l) => l.format === "png") ??
       logos[0]
 
     // Extract primary and secondary colors
     const colors = (data.colors ?? []).map((c: { hex: string; type: string }) => ({
       hex: c.hex,
-      type: c.type, // "dominant" | "accent" | ...
+      type: c.type,
     }))
 
+    // Helper: skip near-white or near-transparent colors for primary
+    const isUsableAsPrimary = (hex: string) => {
+      const h = hex.replace("#", "").toLowerCase()
+      if (h.length !== 6) return false
+      const r = parseInt(h.slice(0, 2), 16)
+      const g = parseInt(h.slice(2, 4), 16)
+      const b = parseInt(h.slice(4, 6), 16)
+      const luminance = (r + g + b) / 3
+      return luminance < 230 // exclude near-white (#E5E5E5 = 229 → excluded)
+    }
+
     const primaryColor =
-      colors.find((c: { type: string }) => c.type === "dominant")?.hex ??
+      colors.find((c: { hex: string; type: string }) => c.type === "dark" && isUsableAsPrimary(c.hex))?.hex ??
+      colors.find((c: { hex: string; type: string }) => c.type === "dominant" && isUsableAsPrimary(c.hex))?.hex ??
+      colors.find((c: { hex: string; type: string }) => c.type === "brand" && isUsableAsPrimary(c.hex))?.hex ??
+      colors.find((c: { hex: string; type: string }) => isUsableAsPrimary(c.hex))?.hex ??
       colors[0]?.hex ??
       "#000000"
 
     const secondaryColor =
-      colors.find((c: { type: string }) => c.type !== "dominant")?.hex ??
-      colors[1]?.hex ??
+      colors.find((c: { hex: string; type: string }) => c.type === "light")?.hex ??
+      colors.find((c: { hex: string; type: string }) => c.type === "accent")?.hex ??
+      colors.find((c: { hex: string; type: string }) => c.hex !== primaryColor)?.hex ??
       "#ffffff"
 
     return NextResponse.json({

@@ -8,7 +8,6 @@ import {
   Sparkles,
   ClipboardList,
   LogOut,
-  Camera,
 } from "lucide-react"
 import { cn } from "@/lib/utils"
 import { createClient } from "@/lib/supabase/client"
@@ -35,15 +34,22 @@ export default function Sidebar() {
   return (
     <aside className="w-60 shrink-0 flex flex-col border-r border-border bg-card h-screen">
       {/* Logo */}
-      <div className="px-6 py-6 border-b border-border">
-        <div className="flex items-center gap-3">
-          <div className="w-8 h-8 rounded-lg bg-gold/20 border border-gold/30 flex items-center justify-center">
-            <Camera className="w-4 h-4 text-gold" />
-          </div>
-          <div>
-            <p className="text-sm font-semibold text-foreground">Booth Dashboard</p>
-            <p className="text-[10px] text-muted-foreground uppercase tracking-widest">Photo Paris</p>
-          </div>
+      <div className="px-5 py-5 border-b border-border">
+        <Link href="/" className="flex items-end gap-2">
+          {/* eslint-disable-next-line @next/next/no-img-element */}
+          <img
+            src="https://cdn.prod.website-files.com/6895d87ce77db277b0f232d0/6895db410c1b084e5c21e7a2_photoboothparis-logo-p-500.webp"
+            alt="Booth Photo Paris"
+            className="h-9 w-auto object-contain"
+          />
+          <span className="text-[10px] text-muted-foreground/60 pb-0.5 leading-none">
+            by Gavroch.Dev
+          </span>
+        </Link>
+        <div className="mt-3 flex items-center gap-2">
+          <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-gold/15 border border-gold/30 text-[10px] font-semibold text-gold tracking-wider">
+            ✦ IA.Agent
+          </span>
         </div>
       </div>
 
@@ -70,8 +76,8 @@ export default function Sidebar() {
         })}
       </nav>
 
-      {/* Logout */}
-      <div className="px-3 py-4 border-t border-border">
+      {/* Footer */}
+      <div className="px-3 py-4 border-t border-border space-y-1">
         <button
           onClick={handleLogout}
           className="flex items-center gap-3 px-3 py-2.5 w-full rounded-lg text-sm text-muted-foreground hover:bg-destructive/10 hover:text-red-400 transition-all duration-150"
@@ -79,6 +85,12 @@ export default function Sidebar() {
           <LogOut className="w-4 h-4 shrink-0" />
           Déconnexion
         </button>
+        <p className="text-[10px] text-muted-foreground/40 px-3 pt-1">
+          developed by{" "}
+          <a href="https://gavroch.dev" target="_blank" rel="noopener noreferrer" className="hover:text-gold transition-colors">
+            Gavroch.dev
+          </a>
+        </p>
       </div>
     </aside>
   )

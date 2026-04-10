@@ -1,69 +1,63 @@
 /**
- * fal.ai — Flux Pro image generation
- * Docs: https://fal.ai/models/fal-ai/flux-pro
+ * Google Imagen — via Google AI Studio REST API
+ * Docs: https://ai.google.dev/api/images
  */
-
-const FAL_API_URL = "https://fal.run/fal-ai/flux-pro"
 
 export interface BrandContext {
   brandName: string
-  primaryColor?: string   // hex e.g. "#D4AF37"
+  primaryColor?: string
   secondaryColor?: string
   logoUrl?: string | null
   description?: string
 }
 
-interface FalImage {
-  url: string
-  width: number
-  height: number
-  content_type: string
-}
-
-interface FalResponse {
-  images: FalImage[]
-  seed?: number
-}
-
 /**
- * Generate a single image via fal.ai Flux Pro.
+ * Generate a single image via Google Imagen.
+ * Returns a base64 data URL — Python decodes it directly (no network download).
  */
 export async function generateImage(prompt: string): Promise<string> {
-  const apiKey = process.env.FAL_KEY
-  if (!apiKey) throw new Error("FAL_KEY is not set")
+  const apiKey = process.env.GOOGLE_AI_STUDIO_API_KEY
+  if (!apiKey) throw new Error("GOOGLE_AI_STUDIO_API_KEY not set")
 
-  const response = await fetch(FAL_API_URL, {
+  const url = `https://generativelanguage.googleapis.com/v1beta/models/imagen-4.0-fast-generate-001:predict?key=${encodeURIComponent(apiKey)}`
+  const res = await fetch(url, {
     method: "POST",
-    headers: {
-      Authorization: `Key ${apiKey}`,
-      "Content-Type": "application/json",
-    },
+    headers: { "Content-Type": "application/json" },
     body: JSON.stringify({
-      prompt,
-      num_images: 1,
-      image_size: "landscape_16_9",
-      num_inference_steps: 28,
-      guidance_scale: 3.5,
-      safety_tolerance: "2",
+      instances: [{ prompt }],
+      parameters: { sampleCount: 1, aspectRatio: "16:9" },
     }),
   })
 
-  if (!response.ok) {
-    const error = await response.text()
-    throw new Error(`fal.ai error ${response.status}: ${error}`)
+  if (!res.ok) {
+    const errText = await res.text()
+    let googleMessage = errText
+    try {
+      const parsed = JSON.parse(errText)
+      if (parsed?.error?.message) googleMessage = String(parsed.error.message)
+    } catch {
+      // keep raw text
+    }
+
+    // Make a few common Google errors more actionable.
+    if (/only available on paid plans/i.test(googleMessage)) {
+      throw new Error(
+        `Google Imagen access error (${res.status}): ${googleMessage} (Go to https://ai.dev/projects to enable a paid plan / billing for your project.)`
+      )
+    }
+
+    throw new Error(`Google Imagen error (${res.status}): ${googleMessage}`)
   }
 
-  const data: FalResponse = await response.json()
-  if (!data.images?.length) throw new Error("fal.ai returned no images")
-  return data.images[0].url
-}
+  const json = await res.json()
+  const pred = json.predictions?.[0]
+  const b64: string | undefined =
+    pred?.bytesBase64Encoded ??
+    pred?.image?.bytesBase64Encoded ??
+    pred?.imageBytes?.bytesBase64Encoded
+  if (!b64) throw new Error("Google Imagen: no image returned")
 
-/**
- * Generate multiple images in parallel via fal.ai Flux Pro.
- */
-export async function generateBrandImages(prompt: string, count: number = 4): Promise<string[]> {
-  const promises = Array.from({ length: count }, () => generateImage(prompt))
-  return Promise.all(promises)
+  return `data:image/png;base64,${b64}`
 }
 
 // ─── Zone-specific prompts ────────────────────────────────────────────────────
@@ -162,15 +156,13 @@ export async function generateAllZones(brand: BrandContext): Promise<{
   goodies_top_url: string
   goodies_bottom_url: string
 }> {
-  const [cover, cabineTop, cabineBottom, kiosk, goodiesTop, goodiesBottom] =
-    await Promise.all([
-      generateImage(promptCover(brand)),
-      generateImage(promptCabine(brand, "top")),
-      generateImage(promptCabine(brand, "bottom")),
-      generateImage(promptKiosk(brand)),
-      generateImage(promptGoodies(brand, "top")),
-      generateImage(promptGoodies(brand, "bottom")),
-    ])
+  // Sequential by default: reduces bursty quota/rate-limit issues.
+  const cover = await generateImage(promptCover(brand))
+  const cabineTop = await generateImage(promptCabine(brand, "top"))
+  const cabineBottom = await generateImage(promptCabine(brand, "bottom"))
+  const kiosk = await generateImage(promptKiosk(brand))
+  const goodiesTop = await generateImage(promptGoodies(brand, "top"))
+  const goodiesBottom = await generateImage(promptGoodies(brand, "bottom"))
 
   return {
     cover_image_url: cover,

@@ -3,7 +3,7 @@ import { redirect } from "next/navigation"
 import DashboardHome from "@/components/dashboard/DashboardHome"
 
 export default async function Home() {
-  const supabase = createClient()
+  const supabase = await createClient()
   const { data: { session } } = await supabase.auth.getSession()
 
   if (!session) {

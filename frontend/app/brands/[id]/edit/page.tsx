@@ -7,7 +7,7 @@ interface Props {
 }
 
 export default async function EditBrandPage({ params }: Props) {
-  const supabase = createClient()
+  const supabase = await createClient()
   const { data: { session } } = await supabase.auth.getSession()
   if (!session) redirect("/login")
 

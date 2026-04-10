@@ -1,5 +1,6 @@
 import io
 import os
+import base64
 import requests
 from fastapi import APIRouter, HTTPException
 from fastapi.responses import StreamingResponse
@@ -29,10 +30,36 @@ class GenerateRequest(BaseModel):
     goodies_bottom_url: Optional[str] = None
 
 
-def download_image(url: str) -> bytes:
-    resp = requests.get(url, timeout=30)
-    resp.raise_for_status()
-    return resp.content
+def get_image_bytes(url_or_data: str) -> bytes:
+    """Get image bytes from either a base64 data URL or an http URL."""
+    if url_or_data.startswith("data:"):
+        # data:image/png;base64,<b64>
+        header, b64 = url_or_data.split(",", 1)
+        return base64.b64decode(b64)
+    return download_image(url_or_data)
+
+
+def download_image(url: str, retries: int = 5) -> bytes:
+    """Download image with retry/backoff — handles Pollinations 429/500."""
+    import time
+    for attempt in range(retries + 1):
+        try:
+            resp = requests.get(url, timeout=60)
+            if resp.status_code == 200:
+                return resp.content
+            if resp.status_code in (429, 500, 503) and attempt < retries:
+                delay = min(2 ** attempt * 2, 20)  # 2s, 4s, 8s, 16s, 20s
+                print(f"Pollinations {resp.status_code} — retry {attempt+1}/{retries} in {delay}s")
+                time.sleep(delay)
+                continue
+            resp.raise_for_status()
+        except requests.exceptions.Timeout:
+            if attempt < retries:
+                print(f"Pollinations timeout — retry {attempt+1}/{retries}")
+                time.sleep(5)
+                continue
+            raise
+    raise RuntimeError(f"download_image failed after {retries} retries: {url}")
 
 
 def get_shape(slide, name: str):
@@ -93,20 +120,30 @@ def generate_presentation(req: GenerateRequest):
         (10, "Group 4",     req.goodies_bottom_url),
     ]
 
-    for idx, name, url in zones:
-        if not url:
+    # Download images sequentially with delay to avoid Pollinations 429
+    active_zones = [(idx, name, url) for idx, name, url in zones if url]
+    downloaded: dict[str, bytes] = {}
+
+    import time
+    for i, (idx, name, url) in enumerate(active_zones):
+        if i > 0 and not url.startswith("data:"):
+            time.sleep(3)
+        try:
+            downloaded[name] = get_image_bytes(url)
+        except Exception as e:
+            print(f"Warning: failed to get image '{name}': {e}")
+
+    for idx, name, url in active_zones:
+        img_bytes = downloaded.get(name)
+        if not img_bytes:
             continue
         shape = get_shape(prs.slides[idx], name)
         if shape is None:
             print(f"Warning: shape '{name}' not found on slide {idx}")
             continue
-        try:
-            img_bytes = download_image(url)
-            replaced = replace_blip(prs.slides[idx].part, shape, img_bytes)
-            if not replaced:
-                print(f"Warning: could not replace blip for '{name}'")
-        except Exception as e:
-            print(f"Warning: failed to process '{name}': {e}")
+        replaced = replace_blip(prs.slides[idx].part, shape, img_bytes)
+        if not replaced:
+            print(f"Warning: could not replace blip for '{name}'")
 
     # Replace brand text (Chanel → new brand)
     brand_title = req.brand_name.title()

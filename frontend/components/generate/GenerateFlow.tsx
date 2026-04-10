@@ -24,6 +24,15 @@ interface BrandData {
 
 type Step = "input" | "preview" | "generating" | "done"
 
+type Zones = {
+  cover_image_url: string
+  cabine_top_url: string
+  cabine_bottom_url: string
+  kiosk_url: string
+  goodies_top_url: string
+  goodies_bottom_url: string
+}
+
 const ZONE_LABELS = [
   "Page de couverture",
   "Cabine — vue 1",
@@ -40,6 +49,7 @@ export default function GenerateFlow() {
   const [lookingUp, setLookingUp] = useState(false)
   const [brand, setBrand] = useState<BrandData | null>(null)
   const [generatingZone, setGeneratingZone] = useState(0)
+  const [zones, setZones] = useState<Zones | null>(null)
   const [pptxUrl, setPptxUrl] = useState<string | null>(null)
   const [pptxFilename, setPptxFilename] = useState("")
 
@@ -74,10 +84,11 @@ export default function GenerateFlow() {
     // Simulate progress through zones
     const progressInterval = setInterval(() => {
       setGeneratingZone((z) => Math.min(z + 1, ZONE_LABELS.length - 1))
-    }, 8000) // ~8s per zone (fal.ai ~5s + margin)
+    }, 2500) // ~2.5s par zone (Google Imagen 3, parallèle)
 
     try {
-      const res = await fetch("/api/generate-pptx", {
+      // 1) Generate images (so we can preview)
+      const imgRes = await fetch("/api/generate-images", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
@@ -90,11 +101,50 @@ export default function GenerateFlow() {
         }),
       })
 
+      if (!imgRes.ok) {
+        const err = await imgRes.json().catch(() => ({} as any))
+        throw new Error(err.detail ?? err.error ?? "Génération des images échouée")
+      }
+
+      const zones = (await imgRes.json()) as Zones
+      setZones(zones)
+      setStep("preview")
+
       clearInterval(progressInterval)
+      return
+    } catch (err) {
+      clearInterval(progressInterval)
+      toast({
+        title: "Erreur de génération",
+        description: String(err),
+        variant: "destructive",
+      })
+      setStep("preview")
+    }
+  }
+
+  async function handleExportPptx() {
+    if (!brand || !zones) return
+    setStep("generating")
+    setGeneratingZone(ZONE_LABELS.length - 1)
+    try {
+      const res = await fetch("/api/generate-pptx", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          brand_name: brand.name,
+          website: brand.domain,
+          primary_color: brand.primary_color,
+          secondary_color: brand.secondary_color,
+          logo_url: brand.logo_url,
+          description: brand.description,
+          zones,
+        }),
+      })
 
       if (!res.ok) {
-        const err = await res.json()
-        throw new Error(err.error ?? "Génération échouée")
+        const err = await res.json().catch(() => ({} as any))
+        throw new Error(err.detail ?? err.error ?? "Export PPTX échoué")
       }
 
       const blob = await res.blob()
@@ -105,9 +155,8 @@ export default function GenerateFlow() {
       setGeneratingZone(ZONE_LABELS.length)
       setStep("done")
     } catch (err) {
-      clearInterval(progressInterval)
       toast({
-        title: "Erreur de génération",
+        title: "Erreur d'export",
         description: String(err),
         variant: "destructive",
       })
@@ -128,6 +177,7 @@ export default function GenerateFlow() {
     setDomain("")
     setBrand(null)
     setPptxUrl(null)
+    setZones(null)
     setGeneratingZone(0)
   }
 
@@ -253,6 +303,39 @@ export default function GenerateFlow() {
                   ))}
                 </div>
               </div>
+
+              {zones && (
+                <div className="space-y-2">
+                  <p className="text-xs font-medium text-muted-foreground uppercase tracking-wider">
+                    Aperçu des visuels générés
+                  </p>
+                  <div className="grid grid-cols-2 gap-3">
+                    {(
+                      [
+                        { key: "cover_image_url", label: ZONE_LABELS[0], src: zones.cover_image_url },
+                        { key: "cabine_top_url", label: ZONE_LABELS[1], src: zones.cabine_top_url },
+                        { key: "cabine_bottom_url", label: ZONE_LABELS[2], src: zones.cabine_bottom_url },
+                        { key: "kiosk_url", label: ZONE_LABELS[3], src: zones.kiosk_url },
+                        { key: "goodies_top_url", label: ZONE_LABELS[4], src: zones.goodies_top_url },
+                        { key: "goodies_bottom_url", label: ZONE_LABELS[5], src: zones.goodies_bottom_url },
+                      ] as const
+                    ).map((item) => (
+                      <div key={item.key} className="space-y-1">
+                        <div className="relative w-full aspect-video overflow-hidden rounded-lg border border-border bg-muted">
+                          <Image
+                            src={item.src}
+                            alt={item.label}
+                            fill
+                            className="object-cover"
+                            unoptimized
+                          />
+                        </div>
+                        <p className="text-[11px] text-muted-foreground truncate">{item.label}</p>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
             </CardContent>
           </Card>
 
@@ -267,11 +350,11 @@ export default function GenerateFlow() {
             </Button>
             <Button
               variant="gold"
-              onClick={handleGenerate}
+              onClick={zones ? handleExportPptx : handleGenerate}
               className="flex-1 gap-2"
             >
               <Sparkles className="w-4 h-4" />
-              Générer le PPTX pour {brand.name}
+              {zones ? `Exporter le PPTX pour ${brand.name}` : `Générer les visuels pour ${brand.name}`}
               <ChevronRight className="w-4 h-4" />
             </Button>
           </div>
@@ -326,7 +409,7 @@ export default function GenerateFlow() {
             </div>
 
             <p className="text-center text-xs text-muted-foreground">
-              ⏱ ~60 secondes — ne ferme pas cet onglet
+              ⏱ ~30 secondes — ne ferme pas cet onglet
             </p>
           </CardContent>
         </Card>

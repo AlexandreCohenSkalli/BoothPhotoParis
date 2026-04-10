@@ -3,7 +3,7 @@ import { redirect } from "next/navigation"
 import BrandsPageClient from "@/components/brands/BrandsPageClient"
 
 export default async function BrandsPage() {
-  const supabase = createClient()
+  const supabase = await createClient()
   const { data: { session } } = await supabase.auth.getSession()
   if (!session) redirect("/login")
 

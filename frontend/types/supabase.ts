@@ -6,7 +6,7 @@ export type Json =
   | { [key: string]: Json | undefined }
   | Json[]
 
-export interface Database {
+export type Database = {
   public: {
     Tables: {
       brands: {
@@ -47,6 +47,7 @@ export interface Database {
           logo_url?: string | null
           updated_at?: string
         }
+        Relationships: []
       }
       generation_jobs: {
         Row: {
@@ -86,11 +87,21 @@ export interface Database {
           started_at?: string | null
           completed_at?: string | null
         }
+        Relationships: []
       }
     }
-    Views: Record<string, never>
-    Functions: Record<string, never>
-    Enums: Record<string, never>
+    Views: {
+      [_ in never]: never
+    }
+    Functions: {
+      [_ in never]: never
+    }
+    Enums: {
+      [_ in never]: never
+    }
+    CompositeTypes: {
+      [_ in never]: never
+    }
   }
 }
 

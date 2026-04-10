@@ -3,10 +3,11 @@
  *
  * All-in-one endpoint:
  * 1. Accepts brand data (from Brandfetch or manually entered)
- * 2. Generates 6 zone images in parallel via fal.ai Flux Pro
+ * 2. Generates 6 zone images via Google Imagen (AI Studio)
  * 3. Sends images + brand info to Python API
  * 4. Returns the generated .pptx file as a download
  */
+export const maxDuration = 300 // 5 min — sequential image gen + retries
 import { NextRequest, NextResponse } from "next/server"
 import { createClient } from "@/lib/supabase/server"
 import { generateAllZones, BrandContext } from "@/lib/imagen"
@@ -19,10 +20,20 @@ const schema = z.object({
   secondary_color: z.string().optional(),
   logo_url: z.string().optional().nullable(),
   description: z.string().optional(),
+  zones: z
+    .object({
+      cover_image_url: z.string().min(1),
+      cabine_top_url: z.string().min(1),
+      cabine_bottom_url: z.string().min(1),
+      kiosk_url: z.string().min(1),
+      goodies_top_url: z.string().min(1),
+      goodies_bottom_url: z.string().min(1),
+    })
+    .optional(),
 })
 
 export async function POST(req: NextRequest) {
-  const supabase = createClient()
+  const supabase = await createClient()
   const { data: { session } } = await supabase.auth.getSession()
   if (!session) return NextResponse.json({ error: "Unauthorized" }, { status: 401 })
 
@@ -32,7 +43,7 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: parsed.error.flatten() }, { status: 400 })
   }
 
-  const { brand_name, website, primary_color, secondary_color, logo_url, description } = parsed.data
+  const { brand_name, website, primary_color, secondary_color, logo_url, description, zones: zonesFromClient } = parsed.data
 
   const brandContext: BrandContext = {
     brandName: brand_name,
@@ -42,16 +53,21 @@ export async function POST(req: NextRequest) {
     description,
   }
 
-  // Step 1: Generate all 6 zone images via fal.ai in parallel
+  // Step 1: Generate images unless already provided (preview flow)
   let zones: Awaited<ReturnType<typeof generateAllZones>>
-  try {
-    zones = await generateAllZones(brandContext)
-  } catch (err) {
-    console.error("Image generation error:", err)
-    return NextResponse.json(
-      { error: "Image generation failed", detail: String(err) },
-      { status: 500 }
-    )
+  if (zonesFromClient) {
+    zones = zonesFromClient
+  } else {
+    try {
+      zones = await generateAllZones(brandContext)
+    } catch (err) {
+      console.error("Image generation error:", err)
+      const detail = err instanceof Error ? err.message : String(err)
+      return NextResponse.json(
+        { error: "Image generation failed", detail },
+        { status: 500 }
+      )
+    }
   }
 
   // Step 2: Call Python API to inject images into PPTX
@@ -77,8 +93,9 @@ export async function POST(req: NextRequest) {
     pptxBuffer = await pyRes.arrayBuffer()
   } catch (err) {
     console.error("Python API error:", err)
+    const detail = err instanceof Error ? err.message : String(err)
     return NextResponse.json(
-      { error: "PPTX generation failed", detail: String(err) },
+      { error: "PPTX generation failed", detail },
       { status: 500 }
     )
   }

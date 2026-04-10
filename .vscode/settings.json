@@ -1,4 +1,10 @@
 {
   "python.defaultInterpreterPath": "${workspaceFolder}/api/venv/bin/python3.9",
-  "python.analysis.extraPaths": ["${workspaceFolder}/api/venv/lib/python3.9/site-packages"]
+  "python.analysis.extraPaths": ["${workspaceFolder}/api/venv/lib/python3.9/site-packages"],
+  "css.validate": false,
+  "scss.validate": false,
+  "less.validate": false,
+  "[css]": {
+    "editor.defaultFormatter": "esbenp.prettier-vscode"
+  }
 }
