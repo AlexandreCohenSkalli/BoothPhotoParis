@@ -1,0 +1,84 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  :root {
+    --background: 0 0% 4%;         /* #0a0a0a — near black */
+    --foreground: 45 30% 92%;      /* warm off-white */
+    --card: 0 0% 7%;
+    --card-foreground: 45 30% 92%;
+    --popover: 0 0% 7%;
+    --popover-foreground: 45 30% 92%;
+    --primary: 43 65% 52%;         /* #D4AF37 gold */
+    --primary-foreground: 0 0% 4%;
+    --secondary: 0 0% 12%;
+    --secondary-foreground: 45 30% 92%;
+    --muted: 0 0% 14%;
+    --muted-foreground: 0 0% 60%;
+    --accent: 0 0% 14%;
+    --accent-foreground: 45 30% 92%;
+    --destructive: 0 72% 51%;
+    --destructive-foreground: 45 30% 92%;
+    --border: 0 0% 16%;
+    --input: 0 0% 16%;
+    --ring: 43 65% 52%;
+    --radius: 0.625rem;
+  }
+}
+
+@layer base {
+  * {
+    @apply border-border;
+  }
+  body {
+    @apply bg-background text-foreground antialiased;
+    font-feature-settings: "rlig" 1, "calt" 1;
+  }
+}
+
+/* Gold gradient text utility */
+@layer utilities {
+  .text-gold-gradient {
+    background: linear-gradient(135deg, #D4AF37 0%, #E8CC6C 50%, #A68B20 100%);
+    -webkit-background-clip: text;
+    -webkit-text-fill-color: transparent;
+    background-clip: text;
+  }
+
+  .border-gold-gradient {
+    border-image: linear-gradient(135deg, #D4AF37, #E8CC6C) 1;
+  }
+
+  .card-hover {
+    @apply transition-all duration-300 hover:border-gold/40 hover:shadow-lg;
+    hover: shadow-gold/10;
+  }
+
+  .shimmer-bg {
+    background: linear-gradient(
+      90deg,
+      hsl(var(--muted)) 25%,
+      hsl(var(--muted) / 0.5) 50%,
+      hsl(var(--muted)) 75%
+    );
+    background-size: 200% 100%;
+    @apply animate-shimmer;
+  }
+}
+
+/* Scrollbar */
+::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+::-webkit-scrollbar-track {
+  background: hsl(var(--background));
+}
+::-webkit-scrollbar-thumb {
+  background: hsl(var(--border));
+  border-radius: 3px;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: hsl(var(--muted-foreground));
+}

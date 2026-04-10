@@ -1,0 +1,365 @@
+"use client"
+
+import { useState } from "react"
+import Image from "next/image"
+import { Button } from "@/components/ui/button"
+import { Input } from "@/components/ui/input"
+import { Label } from "@/components/ui/label"
+import { Card, CardContent } from "@/components/ui/card"
+import { useToast } from "@/hooks/use-toast"
+import {
+  Loader2, Search, Sparkles, Download, CheckCircle2,
+  Globe, Palette, RefreshCw, ChevronRight
+} from "lucide-react"
+import { cn } from "@/lib/utils"
+
+interface BrandData {
+  name: string
+  domain: string
+  logo_url: string | null
+  primary_color: string
+  secondary_color: string
+  description: string
+}
+
+type Step = "input" | "preview" | "generating" | "done"
+
+const ZONE_LABELS = [
+  "Page de couverture",
+  "Cabine — vue 1",
+  "Cabine — vue 2",
+  "Kiosk",
+  "Goodies — rangée 1",
+  "Goodies — rangée 2",
+]
+
+export default function GenerateFlow() {
+  const { toast } = useToast()
+  const [step, setStep] = useState<Step>("input")
+  const [domain, setDomain] = useState("")
+  const [lookingUp, setLookingUp] = useState(false)
+  const [brand, setBrand] = useState<BrandData | null>(null)
+  const [generatingZone, setGeneratingZone] = useState(0)
+  const [pptxUrl, setPptxUrl] = useState<string | null>(null)
+  const [pptxFilename, setPptxFilename] = useState("")
+
+  async function handleLookup() {
+    if (!domain.trim()) return
+    setLookingUp(true)
+    try {
+      const res = await fetch(`/api/brandfetch?domain=${encodeURIComponent(domain.trim())}`)
+      if (!res.ok) {
+        const err = await res.json()
+        throw new Error(err.error ?? "Brand not found")
+      }
+      const data = await res.json()
+      setBrand(data)
+      setStep("preview")
+    } catch (err) {
+      toast({
+        title: "Marque introuvable",
+        description: String(err),
+        variant: "destructive",
+      })
+    } finally {
+      setLookingUp(false)
+    }
+  }
+
+  async function handleGenerate() {
+    if (!brand) return
+    setStep("generating")
+    setGeneratingZone(0)
+
+    // Simulate progress through zones
+    const progressInterval = setInterval(() => {
+      setGeneratingZone((z) => Math.min(z + 1, ZONE_LABELS.length - 1))
+    }, 8000) // ~8s per zone (fal.ai ~5s + margin)
+
+    try {
+      const res = await fetch("/api/generate-pptx", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          brand_name: brand.name,
+          website: brand.domain,
+          primary_color: brand.primary_color,
+          secondary_color: brand.secondary_color,
+          logo_url: brand.logo_url,
+          description: brand.description,
+        }),
+      })
+
+      clearInterval(progressInterval)
+
+      if (!res.ok) {
+        const err = await res.json()
+        throw new Error(err.error ?? "Génération échouée")
+      }
+
+      const blob = await res.blob()
+      const url = URL.createObjectURL(blob)
+      const filename = `${brand.name.replace(/\s+/g, "_")}_x_Booth.pptx`
+      setPptxUrl(url)
+      setPptxFilename(filename)
+      setGeneratingZone(ZONE_LABELS.length)
+      setStep("done")
+    } catch (err) {
+      clearInterval(progressInterval)
+      toast({
+        title: "Erreur de génération",
+        description: String(err),
+        variant: "destructive",
+      })
+      setStep("preview")
+    }
+  }
+
+  function handleDownload() {
+    if (!pptxUrl) return
+    const a = document.createElement("a")
+    a.href = pptxUrl
+    a.download = pptxFilename
+    a.click()
+  }
+
+  function handleReset() {
+    setStep("input")
+    setDomain("")
+    setBrand(null)
+    setPptxUrl(null)
+    setGeneratingZone(0)
+  }
+
+  return (
+    <div className="max-w-2xl mx-auto space-y-8">
+
+      {/* ── Step 1: Domain input ── */}
+      {step === "input" && (
+        <Card className="border-border">
+          <CardContent className="pt-6 space-y-6">
+            <div className="space-y-2">
+              <h2 className="text-xl font-display font-semibold text-foreground">
+                Site internet de la marque
+              </h2>
+              <p className="text-sm text-muted-foreground">
+                Entrez le domaine et le système récupère automatiquement logo, couleurs et identité visuelle.
+              </p>
+            </div>
+
+            <div className="flex gap-3">
+              <div className="relative flex-1">
+                <Globe className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground" />
+                <Input
+                  className="pl-10"
+                  placeholder="ex: chanel.com, dior.com, balenciaga.com"
+                  value={domain}
+                  onChange={(e) => setDomain(e.target.value)}
+                  onKeyDown={(e) => e.key === "Enter" && handleLookup()}
+                  disabled={lookingUp}
+                />
+              </div>
+              <Button
+                variant="gold"
+                onClick={handleLookup}
+                disabled={lookingUp || !domain.trim()}
+                className="gap-2 shrink-0"
+              >
+                {lookingUp ? (
+                  <Loader2 className="w-4 h-4 animate-spin" />
+                ) : (
+                  <Search className="w-4 h-4" />
+                )}
+                {lookingUp ? "Recherche..." : "Rechercher"}
+              </Button>
+            </div>
+          </CardContent>
+        </Card>
+      )}
+
+      {/* ── Step 2: Brand preview ── */}
+      {step === "preview" && brand && (
+        <div className="space-y-4">
+          <Card className="border-border overflow-hidden">
+            <div
+              className="h-2"
+              style={{ backgroundColor: brand.primary_color }}
+            />
+            <CardContent className="pt-5 space-y-5">
+              <div className="flex items-center gap-4">
+                {brand.logo_url ? (
+                  <div className="w-16 h-16 rounded-lg bg-white flex items-center justify-center p-2 shrink-0">
+                    <Image
+                      src={brand.logo_url}
+                      alt={brand.name}
+                      width={56}
+                      height={56}
+                      className="object-contain"
+                    />
+                  </div>
+                ) : (
+                  <div className="w-16 h-16 rounded-lg bg-muted flex items-center justify-center shrink-0">
+                    <span className="text-2xl font-bold text-muted-foreground">
+                      {brand.name[0]}
+                    </span>
+                  </div>
+                )}
+                <div className="flex-1 min-w-0">
+                  <h3 className="text-lg font-display font-bold text-foreground truncate">
+                    {brand.name}
+                  </h3>
+                  <p className="text-sm text-muted-foreground">{brand.domain}</p>
+                </div>
+              </div>
+
+              {brand.description && (
+                <p className="text-sm text-muted-foreground">{brand.description}</p>
+              )}
+
+              <div className="flex items-center gap-3">
+                <Palette className="w-4 h-4 text-muted-foreground" />
+                <div className="flex gap-2">
+                  <div className="flex items-center gap-1.5">
+                    <div
+                      className="w-5 h-5 rounded-full border border-border"
+                      style={{ backgroundColor: brand.primary_color }}
+                    />
+                    <span className="text-xs text-muted-foreground font-mono">
+                      {brand.primary_color}
+                    </span>
+                  </div>
+                  <div className="flex items-center gap-1.5">
+                    <div
+                      className="w-5 h-5 rounded-full border border-border"
+                      style={{ backgroundColor: brand.secondary_color }}
+                    />
+                    <span className="text-xs text-muted-foreground font-mono">
+                      {brand.secondary_color}
+                    </span>
+                  </div>
+                </div>
+              </div>
+
+              <div className="bg-muted/50 rounded-lg p-3 space-y-1">
+                <p className="text-xs font-medium text-muted-foreground uppercase tracking-wider">
+                  Zones à générer
+                </p>
+                <div className="grid grid-cols-2 gap-1">
+                  {ZONE_LABELS.map((label) => (
+                    <div key={label} className="flex items-center gap-1.5 text-xs text-muted-foreground">
+                      <CheckCircle2 className="w-3 h-3 text-gold shrink-0" />
+                      {label}
+                    </div>
+                  ))}
+                </div>
+              </div>
+            </CardContent>
+          </Card>
+
+          <div className="flex gap-3">
+            <Button
+              variant="outline"
+              onClick={handleReset}
+              className="gap-2"
+            >
+              <RefreshCw className="w-4 h-4" />
+              Changer
+            </Button>
+            <Button
+              variant="gold"
+              onClick={handleGenerate}
+              className="flex-1 gap-2"
+            >
+              <Sparkles className="w-4 h-4" />
+              Générer le PPTX pour {brand.name}
+              <ChevronRight className="w-4 h-4" />
+            </Button>
+          </div>
+        </div>
+      )}
+
+      {/* ── Step 3: Generating ── */}
+      {step === "generating" && (
+        <Card className="border-border">
+          <CardContent className="pt-8 pb-8 space-y-6">
+            <div className="text-center space-y-2">
+              <div className="flex justify-center">
+                <div className="w-12 h-12 rounded-full bg-gold/10 flex items-center justify-center">
+                  <Sparkles className="w-6 h-6 text-gold animate-pulse" />
+                </div>
+              </div>
+              <h3 className="font-display text-lg font-semibold">
+                Génération en cours…
+              </h3>
+              <p className="text-sm text-muted-foreground">
+                L&apos;IA génère {ZONE_LABELS.length} visuels personnalisés pour {brand?.name}
+              </p>
+            </div>
+
+            <div className="space-y-2">
+              {ZONE_LABELS.map((label, i) => (
+                <div key={label} className="flex items-center gap-3">
+                  <div className={cn(
+                    "w-5 h-5 rounded-full flex items-center justify-center shrink-0 transition-all",
+                    i < generatingZone
+                      ? "bg-gold/20"
+                      : i === generatingZone
+                      ? "bg-gold/10"
+                      : "bg-muted"
+                  )}>
+                    {i < generatingZone ? (
+                      <CheckCircle2 className="w-3 h-3 text-gold" />
+                    ) : i === generatingZone ? (
+                      <Loader2 className="w-3 h-3 text-gold animate-spin" />
+                    ) : (
+                      <div className="w-1.5 h-1.5 rounded-full bg-muted-foreground/30" />
+                    )}
+                  </div>
+                  <span className={cn(
+                    "text-sm transition-colors",
+                    i <= generatingZone ? "text-foreground" : "text-muted-foreground"
+                  )}>
+                    {label}
+                  </span>
+                </div>
+              ))}
+            </div>
+
+            <p className="text-center text-xs text-muted-foreground">
+              ⏱ ~60 secondes — ne ferme pas cet onglet
+            </p>
+          </CardContent>
+        </Card>
+      )}
+
+      {/* ── Step 4: Done ── */}
+      {step === "done" && brand && (
+        <Card className="border-border">
+          <CardContent className="pt-8 pb-8 space-y-6 text-center">
+            <div className="flex justify-center">
+              <div className="w-16 h-16 rounded-full bg-green-500/10 flex items-center justify-center">
+                <CheckCircle2 className="w-8 h-8 text-green-500" />
+              </div>
+            </div>
+            <div className="space-y-1">
+              <h3 className="font-display text-xl font-bold">Présentation prête !</h3>
+              <p className="text-sm text-muted-foreground">
+                Le PPTX a été généré avec les visuels {brand.name}.
+              </p>
+            </div>
+            <div className="flex flex-col gap-3">
+              <Button variant="gold" onClick={handleDownload} className="gap-2">
+                <Download className="w-4 h-4" />
+                Télécharger {brand.name} x Booth.pptx
+              </Button>
+              <Button variant="outline" onClick={handleReset} className="gap-2">
+                <RefreshCw className="w-4 h-4" />
+                Générer pour une autre marque
+              </Button>
+            </div>
+          </CardContent>
+        </Card>
+      )}
+    </div>
+  )
+}

@@ -1,0 +1,16 @@
+frontend/node_modules/
+frontend/.next/
+frontend/.env.local
+
+api/venv/
+api/__pycache__/
+api/**/__pycache__/
+api/.env
+
+# PPTX files (large binaries — store locally only)
+templates/*.pptx
+exemple/*.pptx
+*.pptx
+
+*.DS_Store
+*.log
