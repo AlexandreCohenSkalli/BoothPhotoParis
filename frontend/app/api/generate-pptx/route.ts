@@ -81,6 +81,8 @@ export async function POST(req: NextRequest) {
       body: JSON.stringify({
         brand_name,
         website: website ?? null,
+        primary_color: primary_color ?? null,
+        logo_url: logo_url ?? null,
         ...zones,
       }),
     })
@@ -100,13 +102,93 @@ export async function POST(req: NextRequest) {
     )
   }
 
-  // Step 3: Return the PPTX file
+  // Step 3: Save to Supabase (upsert brand + upload PPTX + log job)
+  // Non-blocking: failures here never prevent the user from getting their file.
+  let exportedPptxUrl: string | null = null
+  try {
+    // 3a. Get or create brand by name
+    let brandId: string | null = null
+    const { data: existingBrand } = await supabase
+      .from("brands")
+      .select("id")
+      .ilike("name", brand_name)
+      .maybeSingle()
+
+    if (existingBrand?.id) {
+      brandId = existingBrand.id
+      // Update colors/logo if we have fresher data
+      await supabase.from("brands").update({
+        ...(primary_color ? { primary_color } : {}),
+        ...(secondary_color ? { secondary_color } : {}),
+        ...(logo_url ? { logo_url } : {}),
+        ...(description ? { brand_notes: description } : {}),
+        updated_at: new Date().toISOString(),
+      }).eq("id", brandId)
+    } else {
+      const { data: newBrand } = await supabase
+        .from("brands")
+        .insert({
+          name: brand_name,
+          logo_url: logo_url ?? null,
+          primary_color: primary_color ?? null,
+          secondary_color: secondary_color ?? null,
+          brand_notes: description ?? null,
+          created_by: session.user.id,
+        })
+        .select("id")
+        .single()
+      brandId = newBrand?.id ?? null
+    }
+
+    // 3b. Upload PPTX to Storage: exports/{brand_id}/{timestamp}.pptx
+    const timestamp = Date.now()
+    const storagePath = `exports/${brandId ?? brand_name.replace(/\s+/g, "_")}/${timestamp}.pptx`
+    const { error: uploadError } = await supabase.storage
+      .from("brand-assets")
+      .upload(storagePath, pptxBuffer, {
+        contentType: "application/vnd.openxmlformats-officedocument.presentationml.presentation",
+        upsert: true,
+      })
+
+    if (!uploadError) {
+      const { data: { publicUrl } } = supabase.storage
+        .from("brand-assets")
+        .getPublicUrl(storagePath)
+      exportedPptxUrl = publicUrl
+    }
+
+    // 3c. Insert generation_jobs record
+    if (brandId) {
+      await supabase.from("generation_jobs").insert({
+        brand_id: brandId,
+        status: "completed",
+        image_count: 6,
+        output_image_urls: [
+          zones.cover_image_url.startsWith("data:") ? null : zones.cover_image_url,
+          zones.cabine_top_url.startsWith("data:") ? null : zones.cabine_top_url,
+          zones.kiosk_url.startsWith("data:") ? null : zones.kiosk_url,
+          zones.goodies_top_url.startsWith("data:") ? null : zones.goodies_top_url,
+          zones.goodies_bottom_url.startsWith("data:") ? null : zones.goodies_bottom_url,
+        ].filter(Boolean) as string[],
+        exported_pptx_url: exportedPptxUrl,
+        created_by: session.user.id,
+        started_at: new Date().toISOString(),
+        completed_at: new Date().toISOString(),
+      })
+    }
+  } catch (saveErr) {
+    // Log but don't fail — user still gets their PPTX
+    console.error("Supabase save error (non-blocking):", saveErr)
+  }
+
+  // Step 4: Return the PPTX file
   const filename = `${brand_name.replace(/\s+/g, "_")}_x_Booth.pptx`
   return new NextResponse(pptxBuffer, {
     status: 200,
     headers: {
       "Content-Type": "application/vnd.openxmlformats-officedocument.presentationml.presentation",
       "Content-Disposition": `attachment; filename="${filename}"`,
+      ...(exportedPptxUrl ? { "X-Pptx-Storage-Url": exportedPptxUrl } : {}),
     },
   })
 }

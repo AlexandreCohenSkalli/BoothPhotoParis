@@ -3,7 +3,7 @@ import { z } from "zod"
 import { createClient } from "@/lib/supabase/server"
 import { BrandContext, generateAllZones } from "@/lib/imagen"
 
-export const maxDuration = 300
+export const maxDuration = 300 // 5 min — 6 images séquentielles via Google Imagen
 
 const schema = z.object({
   brand_name: z.string().min(1),
