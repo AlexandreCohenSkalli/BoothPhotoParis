@@ -20,6 +20,7 @@ const schema = z.object({
   secondary_color: z.string().optional(),
   logo_url: z.string().optional().nullable(),
   description: z.string().optional(),
+  secteur: z.string().optional(),
   zones: z
     .object({
       cover_image_url: z.string().nullable().optional(),
@@ -43,7 +44,7 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: parsed.error.flatten() }, { status: 400 })
   }
 
-  const { brand_name, website, primary_color, secondary_color, logo_url, description, zones: zonesFromClient } = parsed.data
+  const { brand_name, website, primary_color, secondary_color, logo_url, description, secteur, zones: zonesFromClient } = parsed.data
 
   const brandContext: BrandContext = {
     brandName: brand_name,
@@ -51,6 +52,7 @@ export async function POST(req: NextRequest) {
     secondaryColor: secondary_color,
     logoUrl: logo_url,
     description,
+    secteur,
   }
 
   // Step 1: Generate images unless already provided (preview flow)

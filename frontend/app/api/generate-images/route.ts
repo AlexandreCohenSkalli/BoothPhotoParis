@@ -12,6 +12,7 @@ const schema = z.object({
   secondary_color: z.string().optional(),
   logo_url: z.string().optional().nullable(),
   description: z.string().optional(),
+  secteur: z.string().optional(),
 })
 
 export async function POST(req: NextRequest) {
@@ -25,7 +26,7 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: parsed.error.flatten() }, { status: 400 })
   }
 
-  const { brand_name, primary_color, secondary_color, logo_url, description } = parsed.data
+  const { brand_name, primary_color, secondary_color, logo_url, description, secteur } = parsed.data
 
   const brandContext: BrandContext = {
     brandName: brand_name,
@@ -33,6 +34,7 @@ export async function POST(req: NextRequest) {
     secondaryColor: secondary_color,
     logoUrl: logo_url,
     description,
+    secteur,
   }
 
   try {

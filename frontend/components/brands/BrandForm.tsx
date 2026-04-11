@@ -19,6 +19,7 @@ import LogoUploader from "./LogoUploader"
 const schema = z.object({
   name: z.string().min(1, "Le nom est requis").max(100),
   client_type: z.string().optional(),
+  secteur: z.string().optional(),
   primary_color: z.string().regex(/^#[0-9A-Fa-f]{6}$/, "Format hex invalide").optional().or(z.literal("")),
   secondary_color: z.string().regex(/^#[0-9A-Fa-f]{6}$/, "Format hex invalide").optional().or(z.literal("")),
   brand_notes: z.string().optional(),
@@ -44,6 +45,7 @@ export default function BrandForm({ brand, mode }: Props) {
     defaultValues: {
       name: brand?.name ?? "",
       client_type: brand?.client_type ?? "",
+      secteur: brand?.secteur ?? "",
       primary_color: brand?.primary_color ?? "",
       secondary_color: brand?.secondary_color ?? "",
       brand_notes: brand?.brand_notes ?? "",
@@ -71,6 +73,7 @@ export default function BrandForm({ brand, mode }: Props) {
         logo_url: logoUrl,
         primary_color: values.primary_color || null,
         secondary_color: values.secondary_color || null,
+        secteur: values.secteur || null,
       }
 
       const url = mode === "create" ? "/api/brands" : `/api/brands/${brand!.id}`
@@ -136,6 +139,27 @@ export default function BrandForm({ brand, mode }: Props) {
             <div className="space-y-1.5">
               <Label htmlFor="client_type">Type de client</Label>
               <Input id="client_type" placeholder="Ex: Luxe, Corporate, Mariage..." {...register("client_type")} />
+            </div>
+
+            <div className="space-y-1.5">
+              <Label htmlFor="secteur">Secteur</Label>
+              <select
+                id="secteur"
+                {...register("secteur")}
+                className="flex h-10 w-full rounded-md border border-input bg-background px-3 py-2 text-sm ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-50"
+              >
+                <option value="">— Sélectionner un secteur —</option>
+                <option value="Luxe">Luxe</option>
+                <option value="Beauté &amp; Cosmétique">Beauté &amp; Cosmétique</option>
+                <option value="Mode &amp; Fashion">Mode &amp; Fashion</option>
+                <option value="Tech &amp; Innovation">Tech &amp; Innovation</option>
+                <option value="Corporate &amp; B2B">Corporate &amp; B2B</option>
+                <option value="Mariage &amp; Événementiel">Mariage &amp; Événementiel</option>
+                <option value="Art &amp; Culture">Art &amp; Culture</option>
+                <option value="Food &amp; Boisson">Food &amp; Boisson</option>
+                <option value="Sport &amp; Lifestyle">Sport &amp; Lifestyle</option>
+                <option value="Retail">Retail</option>
+              </select>
             </div>
           </CardContent>
         </Card>

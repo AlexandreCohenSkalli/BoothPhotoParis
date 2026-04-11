@@ -13,6 +13,7 @@ create table if not exists brands (
   id            uuid primary key default gen_random_uuid(),
   name          text not null,
   client_type   text,
+  secteur       text,              -- ex: 'Luxe', 'Mode', 'Tech', 'Mariage'
   primary_color text,              -- format hex: #D4AF37
   secondary_color text,
   style_keywords text[],           -- array de mots-clés
@@ -22,6 +23,9 @@ create table if not exists brands (
   created_at    timestamptz not null default now(),
   updated_at    timestamptz not null default now()
 );
+
+-- Migration : ajouter la colonne secteur si elle n'existe pas encore
+-- ALTER TABLE brands ADD COLUMN IF NOT EXISTS secteur text;
 
 -- Index de recherche
 create index if not exists brands_name_idx on brands(name);

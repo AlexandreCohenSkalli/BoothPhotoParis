@@ -9,6 +9,7 @@ export interface BrandContext {
   secondaryColor?: string
   logoUrl?: string | null
   description?: string
+  secteur?: string          // ex: "Luxe", "Mode & Fashion", "Tech & Innovation"...
 }
 
 /**
@@ -77,10 +78,30 @@ function base(brand: BrandContext): string {
     `Brand: "${brand.brandName}".`,
     colors ? `Brand palette: ${colors}.` : "",
     brand.description ? `Brand identity: ${brand.description}.` : "",
+    brand.secteur ? `Industry sector: ${brand.secteur}.` : "",
     "Clean 3D architectural product render, white or very light grey background, sharp and professional, 16:9.",
     "Designed and branded by Booth Photo Paris, the premium Parisian photobooth company.",
     "No people in the image.",
   ].filter(Boolean).join(" ")
+}
+
+/** Return a venue / atmosphere description tuned to the brand's sector. */
+function secteurVenue(brand: BrandContext): string {
+  if (brand.description) {
+    return `a luxurious event venue fitting the "${brand.brandName}" universe`
+  }
+  const s = (brand.secteur ?? "").toLowerCase()
+  if (s.includes("luxe"))        return "an opulent palace ballroom with marble floors, gilded mirrors, crystal chandeliers and lush floral arrangements"
+  if (s.includes("beaut"))       return "a sleek cosmetics launch event space with white walls, pastel florals, warm spotlights and beauty editorial props"
+  if (s.includes("mode") || s.includes("fashion")) return "a high-fashion runway or Parisian atelier loft with exposed brick, dramatic lighting and clothes racks in soft bokeh"
+  if (s.includes("tech"))        return "a futuristic tech conference hall with LED walls, cool blue and purple uplighting and a sleek industrial feel"
+  if (s.includes("corporate"))   return "a modern corporate event venue with clean architectural lines, neutral tones, blue accent lighting and branded signage"
+  if (s.includes("mariage") || s.includes("vénem")) return "an enchanted outdoor wedding reception with fairy lights, lush rose garlands, draped white fabric and candlelit tables"
+  if (s.includes("art") || s.includes("culture"))  return "a contemporary art gallery with white walls, track lighting and sculptural installations in soft bokeh"
+  if (s.includes("food") || s.includes("boisson")) return "a chic restaurant launch or rooftop cocktail party with warm Edison lights, wooden decor and artisan food displays"
+  if (s.includes("sport"))       return "a dynamic sports arena or exclusive athletic brand activation space with bold lighting and energetic crowd in bokeh"
+  if (s.includes("retail"))      return "a luxury flagship store opening with sleek wall displays, spotlit product shelves and a stylish crowd in bokeh"
+  return "an elegant Parisian event space with high ceilings, warm golden chandeliers, marble floors and floral arrangements"
 }
 
 /**
@@ -122,9 +143,7 @@ export function promptCover(brand: BrandContext): string {
 export function promptCabine(brand: BrandContext, angle: "top" | "bottom"): string {
   if (angle === "top") {
     // Vue 1 — cabine arrondie dans un vrai décor événementiel
-    const venueStyle = brand.description
-      ? `a luxurious event venue fitting the "${brand.brandName}" universe`
-      : `an elegant Parisian event space with high ceilings, warm golden chandeliers, marble floors and floral arrangements`
+    const venueStyle = secteurVenue(brand)
     return [
       `Editorial photograph of a branded photo booth cabine at a real event for "${brand.brandName}".`,
       "The photo booth is a tall box with a large rounded-arch door opening on the front face. Vertical fabric curtains hanging inside the arch opening. Dispensing print slot on the side.",

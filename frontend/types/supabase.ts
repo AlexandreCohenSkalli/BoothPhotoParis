@@ -14,6 +14,7 @@ export type Database = {
           id: string
           name: string
           client_type: string | null
+          secteur: string | null
           primary_color: string | null
           secondary_color: string | null
           style_keywords: string[] | null
@@ -27,6 +28,7 @@ export type Database = {
           id?: string
           name: string
           client_type?: string | null
+          secteur?: string | null
           primary_color?: string | null
           secondary_color?: string | null
           style_keywords?: string[] | null
@@ -40,6 +42,7 @@ export type Database = {
           id?: string
           name?: string
           client_type?: string | null
+          secteur?: string | null
           primary_color?: string | null
           secondary_color?: string | null
           style_keywords?: string[] | null

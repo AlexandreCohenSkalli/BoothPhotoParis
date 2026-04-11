@@ -254,24 +254,39 @@ def generate_presentation(req: GenerateRequest):
         except Exception as e:
             print(f"Warning: could not delete extra Chanel slide: {e}")
 
-    # ── Zones brand à remplacer (replace_blip sur shapes existantes) ──────────
-    # Slide 0  : logo marque centré (Freeform 5 dans Chanel)
-    # Slide 4  : Freeform 25 = cabine top, Freeform 24 = cabine bottom
-    # Slide 5  : Freeform 8  = kiosk brand
-    # Slide 9  : Group 2 = goodies haut, Group 4 = goodies bas
+    # ── Zones brand à remplacer via replace_blip ──────────────────────────────
+    # Slide 0  : Freeform 3 (top-level) = logo marque cover
+    # Slide 3  (p4 "Photobooth classique") : deux PETITES images de la bande
+    #           → Freeform 5 (enfant Group 4) et Freeform 7 (enfant Group 6)
+    #           → NE PAS toucher Freeform 3 / Group 2 (la grande photo, figée)
+    # Slide 4  (p5 "Cabines photos") : Freeform 25 = cabine top, Freeform 24 = bas
+    # Slide 5  (p6 "The Kiosk") : Freeform 8 = photo éditoriale cabine
+    # Goodies  (slide 9 après suppression = p11 "Nos goodies") :
+    #           → inject_picture_at_shape sur "Group 2" et "Group 4"
+    #             (les enfants Freeform 3/5 sont minuscules – l'image est dans le groupe)
     blip_zones = [
-        (0, "Freeform 3",  req.logo_url),          # logo marque cover
-        (4, "Freeform 25", req.cabine_top_url),    # cabine haut
-        (4, "Freeform 24", req.cabine_bottom_url), # cabine bas
-        (5, "Freeform 8",  req.kiosk_url),         # kiosk
-        (9, "Group 2",     req.goodies_top_url),   # goodies haut
-        (9, "Group 4",     req.goodies_bottom_url),# goodies bas
+        (0, "Freeform 3",  req.logo_url),           # logo marque cover (top-level)
+        (3, "Freeform 5",  req.cabine_top_url),     # p4 petite gauche (Group 4 child)
+        (3, "Freeform 7",  req.cabine_bottom_url),  # p4 petite droite (Group 6 child)
+        (4, "Freeform 25", req.cabine_top_url),     # p5 cabine arrondie
+        (4, "Freeform 24", req.cabine_bottom_url),  # p5 cabine carrée
+        (5, "Freeform 8",  req.kiosk_url),          # p6 kiosk (indices non décalés après delete)
     ]
 
-    # ── Téléchargements ────────────────────────────────────────────────────────
+    # ── Téléchargements — dédupliqués (même URL peut apparaître sur 2 slides) ──
     import time
     fetched: dict[str, bytes] = {}
-    items = [(f"{idx}_{name}", url) for idx, name, url in blip_zones if url]
+    # Deduplicate by URL so we download each image only once
+    seen_urls: dict[str, str] = {}  # url → first key
+    items: list[tuple[str, str]] = []
+    for idx, name, url in blip_zones:
+        if not url:
+            continue
+        if url not in seen_urls:
+            key = f"{idx}_{name}"
+            seen_urls[url] = key
+            items.append((key, url))
+        # else: we'll resolve via seen_urls at apply time
 
     for i, (key, url) in enumerate(items):
         if i > 0 and not url.startswith("data:"):
@@ -285,7 +300,11 @@ def generate_presentation(req: GenerateRequest):
     for idx, name, url in blip_zones:
         if not url:
             continue
-        img_bytes = fetched.get(f"{idx}_{name}")
+        # Resolve bytes: use original key if this url was deduped
+        key = f"{idx}_{name}"
+        if key not in fetched:
+            key = seen_urls.get(url, key)
+        img_bytes = fetched.get(key)
         if not img_bytes:
             continue
         slide = prs.slides[idx]
@@ -295,6 +314,28 @@ def generate_presentation(req: GenerateRequest):
             continue
         if not replace_blip(slide.part, shape, img_bytes):
             print(f"Warning: replace_blip failed for '{name}' on slide {idx}")
+
+    # ── Goodies : inject_picture_at_shape sur le groupe (overlay fiable) ─────
+    # python-pptx conserve les indices ORIGINAUX en mémoire même après _delete_slide.
+    # "Nos goodies" = index 10 dans le template Chanel, reste à 10 après suppression.
+    # Le blip est dans un tout petit enfant Freeform — on overlay le GROUP entier.
+    GOODIES_SLIDE = 10
+    goodies_inject = [
+        ("Group 2", req.goodies_top_url),
+        ("Group 4", req.goodies_bottom_url),
+    ]
+    for group_name, url in goodies_inject:
+        if not url:
+            continue
+        try:
+            img_bytes_g = get_image_bytes(url)
+        except Exception as e:
+            print(f"Warning: goodies fetch failed for '{group_name}': {e}")
+            continue
+        try:
+            inject_picture_at_shape(prs.slides[GOODIES_SLIDE], group_name, img_bytes_g)
+        except Exception as e:
+            print(f"Warning: goodies inject failed for '{group_name}': {e}")
 
     # ── Cover : fond brand + logo centré + textes standard ────────────────────
     cover_slide = prs.slides[0]
