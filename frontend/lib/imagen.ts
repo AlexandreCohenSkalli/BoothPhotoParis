@@ -15,7 +15,7 @@ export interface BrandContext {
  * Generate a single image via Google Imagen.
  * Returns a base64 data URL — Python decodes it directly (no network download).
  */
-export async function generateImage(prompt: string): Promise<string> {
+export async function generateImage(prompt: string, aspectRatio: "16:9" | "9:16" | "1:1" = "16:9"): Promise<string> {
   const apiKey = process.env.GOOGLE_AI_STUDIO_API_KEY
   if (!apiKey) throw new Error("GOOGLE_AI_STUDIO_API_KEY not set")
 
@@ -25,7 +25,7 @@ export async function generateImage(prompt: string): Promise<string> {
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({
       instances: [{ prompt }],
-      parameters: { sampleCount: 1, aspectRatio: "16:9" },
+      parameters: { sampleCount: 1, aspectRatio },
     }),
   })
 
@@ -121,60 +121,49 @@ export function promptCover(brand: BrandContext): string {
  */
 export function promptCabine(brand: BrandContext, angle: "top" | "bottom"): string {
   if (angle === "top") {
-    // Model 1: rounded cabine, photorealistic, Roland Garros style
+    // Vue 1 — cabine arrondie dans un vrai décor événementiel
+    const venueStyle = brand.description
+      ? `a luxurious event venue fitting the "${brand.brandName}" universe`
+      : `an elegant Parisian event space with high ceilings, warm golden chandeliers, marble floors and floral arrangements`
     return [
-      `Photorealistic 3D product render of a photobooth cabine (Model: "Cabine Arrondie") branded for "${brand.brandName}".`,
-      "The cabine has a ROUNDED box shape with large-radius rounded corners on all outer edges — like a rounded rectangle in 3D, similar to a modern photo booth.",
-      "Front face has one large smooth ROUNDED ARCH door opening (wide, tall, fully rounded top). Inside the arch: vertical fabric curtains hanging from a top rail, slightly parted to reveal dark interior.",
-      "Left panel has a small horizontal photo print dispensing slot near the middle.",
+      `Editorial photograph of a branded photo booth cabine at a real event for "${brand.brandName}".`,
+      "The photo booth is a tall box with a large rounded-arch door opening on the front face. Vertical fabric curtains hanging inside the arch opening. Dispensing print slot on the side.",
       brand.primaryColor
-        ? `Entire exterior wrapped in solid brand color ${brand.primaryColor}, matte finish.`
-        : "Exterior wrapped in matte solid-color panels.",
-      `"${brand.brandName}" logo as a circular badge printed on the top-left of the front face.`,
-      "Slight 3/4 front-left angle view. Outdoor or clean neutral background. Bright even lighting. Photorealistic render quality. No people.",
+        ? `Entire exterior wrapped in ${brand.primaryColor}, matte premium finish.`
+        : "Exterior in a rich solid brand color, matte premium finish.",
+      `"${brand.brandName}" logo badge on the front face.`,
+      `Scene: ${venueStyle}. The booth stands centered on the venue floor. Rich atmospheric background — guests mingling in soft bokeh behind, warm uplighting on the booth. Elegant, aspirational mood.`,
+      "FULL MACHINE IN FRAME — entire booth visible head to toe, floor contact visible. Camera pulled back wide. Cinematic editorial quality photography. No people inside the booth.",
     ].filter(Boolean).join(" ")
   } else {
-    // Model 2: squared cabine, SketchUp technical render, QVEMA style
+    // Vue 2 — rendu SketchUp technique fidèle à l'image de référence Booth/Chanel
     return [
-      `SketchUp-style 3D technical render of a photobooth cabine (Model: "Cabine Carrée") branded for "${brand.brandName}".`,
-      "The cabine is a PERFECTLY RECTANGULAR box with sharp 90° corners — no rounding. Dimensions: exactly 148 cm wide × 148 cm deep × 189.3 cm tall.",
-      "Front face divided into two sections: left narrow panel (with print dispensing slot), right wider section with curtained opening.",
-      "Vertical fabric curtains hang inside the opening. Top of the cabine has a flat roof panel.",
+      `SketchUp 3D architectural render of a photo booth cabine branded for "${brand.brandName}". Style: technical product visualization, exact same aesthetic as a Booth Paris SketchUp export.`,
+      "Structure: tall rectangular box, approximately 148 cm wide × 148 cm deep × 189 cm tall. Flat roof panel. Front face divided into left narrow panel (with dispensing slot and small screen showing photo strips) and right wider opening with hanging vertical fabric curtains. Right side panel has large brand wrap graphics.",
       brand.primaryColor
-        ? `Side panel fully wrapped with brand imagery on a ${brand.primaryColor} background.`
-        : "Side panel wrapped with brand imagery on a dark background.",
-      `"${brand.brandName}" brand name in large bold text on the side panel.`,
-      "3/4 perspective view showing front-left and right side. Dimension annotation lines with labels: 148.0 cm width, 148.0 cm depth, 189.3 cm height.",
-      "Clean white or very light grey background. SketchUp architectural visualization style — flat colors, sharp edges, technical drawing aesthetic, no photorealistic lighting.",
+        ? `Panels in ${brand.primaryColor} with contrasting trim. Right side panel large brand graphic on ${brand.primaryColor} background.`
+        : "Dark wood-tone panels with contrasting trim. Right side panel large brand graphic.",
+      `"${brand.brandName}" brand name and logo large on the right side panel. Small "${brand.brandName}" badge on the front left panel.`,
+      "Viewed from a 3/4 front-right perspective showing front face and right side. Light grey-green SketchUp ground plane visible, dimension annotation lines with measurements. Checkerboard or solid floor texture at base. Characteristic SketchUp flat ambient lighting, no shadows, technical drawing feel.",
+      "FULL MACHINE IN FRAME — entire booth visible head to toe. Nothing cropped.",
     ].filter(Boolean).join(" ")
   }
 }
 
 /**
- * Zone 4 — Kiosk render
- *
- * The Booth kiosk is a tall slim open-air cabinet (portrait orientation):
- * - Flat cabinet, portrait format, slightly rounded outer corners (not sharp 90°)
- * - TOP section: branded header panel with brand logo/name prominently displayed
- * - MIDDLE section: large touchscreen showing a 2×2 grid of photo strips
- * - Above screen: small camera lens visible
- * - SIDE: thin horizontal print dispensing slot on the right side panel
- * - Open-air — no curtains, no enclosure
- * - Rendered in an atmospheric context matching the brand (outdoor/indoor venue)
- * - Elegant, sleek, premium feel — NOT a simple colored box with harsh square edges
+ * Zone 4 — Kiosk render (PORTRAIT 9:16)
+ * Rectangular tower: logo+name header, 4 photo strips in 2×2 grid on screen, small camera above screen.
  */
 export function promptKiosk(brand: BrandContext): string {
   return [
-    `Photorealistic 3D product render of an open-air photobooth kiosk branded for "${brand.brandName}".`,
-    "The kiosk is a tall slim freestanding cabinet in portrait format with slightly rounded outer corners.",
-    "Structure: branded header panel at top with logo/name, large central screen showing a 2×2 grid of photo strips in the middle section, small camera lens above the screen, thin horizontal print slot on the right side.",
-    "Open-air design — no curtains, no enclosed box. Sleek and modern, premium finish.",
+    `3D product render of a photobooth kiosk tower branded for "${brand.brandName}".`,
+    "The kiosk is a tall slim freestanding rectangular column (much taller than wide). Exact structure from top to bottom: (1) flat square header box on top with brand logo and brand name large — like a lightbox sign; (2) small round camera lens mounted just below the header; (3) large vertical rectangular touchscreen display in the center of the column showing a 2×2 grid of four photo strip thumbnails; (4) thin horizontal print dispensing slot near the bottom.",
+    "Open-air design — no curtains, no enclosure. Clean straight edges, slightly rounded outer corners.",
     brand.primaryColor
-      ? `Cabinet exterior in brand color ${brand.primaryColor} with elegant matte finish and subtle brand detailing.`
-      : "Cabinet in sleek matte dark finish.",
-    `"${brand.brandName}" name and logo large on the top header panel.`,
-    "Slight 3/4 front angle. Beautiful atmospheric background context matching the brand identity — elegant venue, warm ambient lighting, premium event atmosphere. No harsh studio background.",
-    "Photorealistic render quality, cinematic lighting, sharp and polished — NOT a flat colored box.",
+      ? `Exterior column panels in solid ${brand.primaryColor}, matte premium finish.`
+      : "Exterior in matte dark premium finish.",
+    `Brand logo and "${brand.brandName}" name prominently on the top header lightbox. Brand color accents on the column.`,
+    "FULL MACHINE IN FRAME — entire kiosk visible from top of header to floor contact. Camera pulled back. Plain soft white or very light grey studio background, no room environment. Product studio render quality. No people.",
   ].filter(Boolean).join(" ")
 }
 
@@ -199,23 +188,22 @@ export function promptGoodies(brand: BrandContext, row: "top" | "bottom"): strin
  * Returns an object matching the Python API's GenerateRequest fields.
  */
 export async function generateAllZones(brand: BrandContext): Promise<{
-  cover_image_url: string
+  cover_image_url: string | null
   cabine_top_url: string
   cabine_bottom_url: string
   kiosk_url: string
   goodies_top_url: string
   goodies_bottom_url: string
 }> {
-  // Sequential by default: reduces bursty quota/rate-limit issues.
-  const cover = await generateImage(promptCover(brand))
-  const cabineTop = await generateImage(promptCabine(brand, "top"))
-  const cabineBottom = await generateImage(promptCabine(brand, "bottom"))
-  const kiosk = await generateImage(promptKiosk(brand))
-  const goodiesTop = await generateImage(promptGoodies(brand, "top"))
-  const goodiesBottom = await generateImage(promptGoodies(brand, "bottom"))
+  // Cover = no AI image (Python uses brand logo + background color directly)
+  const cabineTop    = await generateImage(promptCabine(brand, "top"),    "9:16")
+  const cabineBottom = await generateImage(promptCabine(brand, "bottom"), "9:16")
+  const kiosk        = await generateImage(promptKiosk(brand),             "9:16")
+  const goodiesTop   = await generateImage(promptGoodies(brand, "top"),   "16:9")
+  const goodiesBottom = await generateImage(promptGoodies(brand, "bottom"), "16:9")
 
   return {
-    cover_image_url: cover,
+    cover_image_url: null,
     cabine_top_url: cabineTop,
     cabine_bottom_url: cabineBottom,
     kiosk_url: kiosk,

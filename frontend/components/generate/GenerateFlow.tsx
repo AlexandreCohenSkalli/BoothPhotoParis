@@ -25,7 +25,7 @@ interface BrandData {
 type Step = "input" | "preview" | "generating" | "done"
 
 type Zones = {
-  cover_image_url: string
+  cover_image_url: string | null
   cabine_top_url: string
   cabine_bottom_url: string
   kiosk_url: string
@@ -34,7 +34,6 @@ type Zones = {
 }
 
 const ZONE_LABELS = [
-  "Page de couverture",
   "Cabine — vue 1",
   "Cabine — vue 2",
   "Kiosk",
@@ -312,21 +311,20 @@ export default function GenerateFlow() {
                   <div className="grid grid-cols-2 gap-3">
                     {(
                       [
-                        { key: "cover_image_url", label: ZONE_LABELS[0], src: zones.cover_image_url },
-                        { key: "cabine_top_url", label: ZONE_LABELS[1], src: zones.cabine_top_url },
-                        { key: "cabine_bottom_url", label: ZONE_LABELS[2], src: zones.cabine_bottom_url },
-                        { key: "kiosk_url", label: ZONE_LABELS[3], src: zones.kiosk_url },
-                        { key: "goodies_top_url", label: ZONE_LABELS[4], src: zones.goodies_top_url },
-                        { key: "goodies_bottom_url", label: ZONE_LABELS[5], src: zones.goodies_bottom_url },
-                      ] as const
+                        { key: "cabine_top_url",    label: ZONE_LABELS[0], src: zones.cabine_top_url,    portrait: true },
+                        { key: "cabine_bottom_url", label: ZONE_LABELS[1], src: zones.cabine_bottom_url, portrait: true },
+                        { key: "kiosk_url",         label: ZONE_LABELS[2], src: zones.kiosk_url,         portrait: true },
+                        { key: "goodies_top_url",   label: ZONE_LABELS[3], src: zones.goodies_top_url,   portrait: false },
+                        { key: "goodies_bottom_url",label: ZONE_LABELS[4], src: zones.goodies_bottom_url,portrait: false },
+                      ] as { key: string; label: string; src: string; portrait: boolean }[]
                     ).map((item) => (
                       <div key={item.key} className="space-y-1">
-                        <div className="relative w-full aspect-video overflow-hidden rounded-lg border border-border bg-muted">
+                        <div className={`relative w-full overflow-hidden rounded-lg border border-border bg-muted ${item.portrait ? "aspect-[9/16]" : "aspect-video"}`}>
                           <Image
                             src={item.src}
                             alt={item.label}
                             fill
-                            className="object-cover"
+                            className="object-contain"
                             unoptimized
                           />
                         </div>

@@ -2,10 +2,12 @@
 
 import Image from "next/image"
 import Link from "next/link"
+import { useState } from "react"
 import { GenerationJob } from "@/types/supabase"
 import { Card, CardContent } from "@/components/ui/card"
 import { Button } from "@/components/ui/button"
-import { ClipboardList, Download, ImageIcon } from "lucide-react"
+import { Input } from "@/components/ui/input"
+import { ClipboardList, Download, ImageIcon, Search, Trash2 } from "lucide-react"
 import { formatDate } from "@/lib/utils"
 import JobStatusBadge from "./JobStatusBadge"
 
@@ -13,14 +15,49 @@ interface JobWithBrand extends GenerationJob {
   brands: { name: string; logo_url: string | null } | null
 }
 
-export default function JobsPageClient({ jobs }: { jobs: JobWithBrand[] }) {
+export default function JobsPageClient({ jobs: initialJobs }: { jobs: JobWithBrand[] }) {
+  const [jobs, setJobs] = useState<JobWithBrand[]>(initialJobs)
+  const [search, setSearch] = useState("")
+  const [deleting, setDeleting] = useState<Set<string>>(new Set())
+
+  const filtered = jobs.filter((j) =>
+    (j.brands?.name ?? "").toLowerCase().includes(search.toLowerCase())
+  )
+
+  async function handleDelete(id: string) {
+    if (!confirm("Supprimer cette génération ?")) return
+    setDeleting((prev) => new Set(prev).add(id))
+    try {
+      const res = await fetch(`/api/jobs/${id}`, { method: "DELETE" })
+      if (res.ok) {
+        setJobs((prev) => prev.filter((j) => j.id !== id))
+      } else {
+        alert("Erreur lors de la suppression")
+      }
+    } finally {
+      setDeleting((prev) => { const s = new Set(prev); s.delete(id); return s })
+    }
+  }
+
   return (
     <div className="space-y-6 animate-fade-in">
-      <div>
-        <h1 className="text-2xl font-bold text-foreground">Historique</h1>
-        <p className="text-muted-foreground text-sm mt-0.5">
-          {jobs.length} génération{jobs.length !== 1 ? "s" : ""}
-        </p>
+      <div className="flex items-start justify-between gap-4 flex-wrap">
+        <div>
+          <h1 className="text-2xl font-bold text-foreground">Historique</h1>
+          <p className="text-muted-foreground text-sm mt-0.5">
+            {filtered.length} génération{filtered.length !== 1 ? "s" : ""}
+            {search && ` · filtré sur "${search}"`}
+          </p>
+        </div>
+        <div className="relative w-64">
+          <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-muted-foreground" />
+          <Input
+            placeholder="Rechercher une marque…"
+            value={search}
+            onChange={(e) => setSearch(e.target.value)}
+            className="pl-8 h-8 text-sm"
+          />
+        </div>
       </div>
 
       {jobs.length === 0 ? (
@@ -33,9 +70,15 @@ export default function JobsPageClient({ jobs }: { jobs: JobWithBrand[] }) {
             </Button>
           </CardContent>
         </Card>
+      ) : filtered.length === 0 ? (
+        <Card className="border-dashed">
+          <CardContent className="py-12 text-center">
+            <p className="text-sm text-muted-foreground">Aucun résultat pour &quot;{search}&quot;</p>
+          </CardContent>
+        </Card>
       ) : (
         <div className="space-y-3">
-          {jobs.map((job) => (
+          {filtered.map((job) => (
             <Card key={job.id} className="hover:border-gold/20 transition-colors">
               <CardContent className="p-4">
                 <div className="flex items-start gap-4">
@@ -91,6 +134,16 @@ export default function JobsPageClient({ jobs }: { jobs: JobWithBrand[] }) {
                         </Link>
                       </Button>
                     )}
+                    <Button
+                      variant="ghost"
+                      size="sm"
+                      className="h-8 w-8 p-0 text-muted-foreground hover:text-red-500 hover:bg-red-500/10"
+                      onClick={() => handleDelete(job.id)}
+                      disabled={deleting.has(job.id)}
+                      title="Supprimer"
+                    >
+                      <Trash2 className="w-3.5 h-3.5" />
+                    </Button>
                   </div>
                 </div>
               </CardContent>

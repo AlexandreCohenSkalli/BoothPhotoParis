@@ -97,15 +97,67 @@ def replace_blip(slide_part, shape, img_bytes: bytes) -> bool:
         return False
 
 
+def replace_blip_contained(slide_part, shape, img_bytes: bytes) -> bool:
+    """Replace blipFill image AND adjust fillRect so the image is letterboxed/pillarboxed
+    (contained, not stretched) within the shape bounds. Requires Pillow."""
+    # First do the regular blip swap
+    if not replace_blip(slide_part, shape, img_bytes):
+        return False
+
+    # Read image dimensions to compute aspect-ratio-correct fillRect padding
+    try:
+        from PIL import Image as _PILImage
+        import io as _io
+        img = _PILImage.open(_io.BytesIO(img_bytes))
+        iw, ih = img.size
+        img.close()
+    except Exception:
+        return True  # blip replaced, just skip padding
+
+    sw = shape.width
+    sh = shape.height
+    if sw <= 0 or sh <= 0 or iw <= 0 or ih <= 0:
+        return True
+
+    shape_ar = sw / sh
+    img_ar   = iw / ih
+
+    # fillRect values are in thousandths of a percent (100000 = 100%)
+    # Positive = inset (shrink), negative = expand
+    if img_ar > shape_ar:
+        # Image is wider than shape → fit by width, add top/bottom padding
+        rendered_frac = shape_ar / img_ar          # fraction of shape height used
+        pad = int((1 - rendered_frac) / 2 * 100000)
+        fr = {"l": "0", "t": str(pad), "r": "0", "b": str(pad)}
+    else:
+        # Image is taller than shape → fit by height, add left/right padding
+        rendered_frac = img_ar / shape_ar
+        pad = int((1 - rendered_frac) / 2 * 100000)
+        fr = {"l": str(pad), "t": "0", "r": str(pad), "b": "0"}
+
+    # Update the fillRect element in blipFill
+    fill_rect_el = shape._element.find(".//" + qn("a:fillRect"))
+    if fill_rect_el is not None:
+        for k, v in fr.items():
+            fill_rect_el.set(k, v)
+
+    return True
+
+
 def replace_text(slide, old: str, new: str):
-    """Replace text occurrences across all shapes in a slide."""
+    """Replace text occurrences across all shapes in a slide, including group children."""
+    def _replace_in_shape(s):
+        if s.has_text_frame:
+            for para in s.text_frame.paragraphs:
+                for run in para.runs:
+                    if old in run.text:
+                        run.text = run.text.replace(old, new)
+        if s.shape_type == 6:  # GROUP — recurse into children
+            for child in s.shapes:
+                _replace_in_shape(child)
+
     for shape in slide.shapes:
-        if not shape.has_text_frame:
-            continue
-        for para in shape.text_frame.paragraphs:
-            for run in para.runs:
-                if old in run.text:
-                    run.text = run.text.replace(old, new)
+        _replace_in_shape(shape)
 
 
 def _delete_slide(prs, slide_idx: int):
@@ -208,12 +260,12 @@ def generate_presentation(req: GenerateRequest):
     # Slide 5  : Freeform 8  = kiosk brand
     # Slide 9  : Group 2 = goodies haut, Group 4 = goodies bas
     blip_zones = [
-        (0, "Freeform 3",  req.logo_url),          # logo marque (blipFill rId3 sur cover)
-        (4, "Freeform 25", req.cabine_top_url),
-        (4, "Freeform 24", req.cabine_bottom_url),
-        (5, "Freeform 8",  req.kiosk_url),
-        (9, "Group 2",     req.goodies_top_url),
-        (9, "Group 4",     req.goodies_bottom_url),
+        (0, "Freeform 3",  req.logo_url),          # logo marque cover
+        (4, "Freeform 25", req.cabine_top_url),    # cabine haut
+        (4, "Freeform 24", req.cabine_bottom_url), # cabine bas
+        (5, "Freeform 8",  req.kiosk_url),         # kiosk
+        (9, "Group 2",     req.goodies_top_url),   # goodies haut
+        (9, "Group 4",     req.goodies_bottom_url),# goodies bas
     ]
 
     # ── Téléchargements ────────────────────────────────────────────────────────

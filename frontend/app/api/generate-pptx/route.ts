@@ -22,7 +22,7 @@ const schema = z.object({
   description: z.string().optional(),
   zones: z
     .object({
-      cover_image_url: z.string().min(1),
+      cover_image_url: z.string().nullable().optional(),
       cabine_top_url: z.string().min(1),
       cabine_bottom_url: z.string().min(1),
       kiosk_url: z.string().min(1),
@@ -164,11 +164,11 @@ export async function POST(req: NextRequest) {
         status: "completed",
         image_count: 6,
         output_image_urls: [
-          zones.cover_image_url.startsWith("data:") ? null : zones.cover_image_url,
-          zones.cabine_top_url.startsWith("data:") ? null : zones.cabine_top_url,
-          zones.kiosk_url.startsWith("data:") ? null : zones.kiosk_url,
-          zones.goodies_top_url.startsWith("data:") ? null : zones.goodies_top_url,
-          zones.goodies_bottom_url.startsWith("data:") ? null : zones.goodies_bottom_url,
+          zones.cabine_top_url?.startsWith("data:") ? null : zones.cabine_top_url,
+          zones.cabine_bottom_url?.startsWith("data:") ? null : zones.cabine_bottom_url,
+          zones.kiosk_url?.startsWith("data:") ? null : zones.kiosk_url,
+          zones.goodies_top_url?.startsWith("data:") ? null : zones.goodies_top_url,
+          zones.goodies_bottom_url?.startsWith("data:") ? null : zones.goodies_bottom_url,
         ].filter(Boolean) as string[],
         exported_pptx_url: exportedPptxUrl,
         created_by: session.user.id,
