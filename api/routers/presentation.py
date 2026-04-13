@@ -27,9 +27,19 @@ CHANEL_PATH = os.path.join(
 class GenerateRequest(BaseModel):
     brand_name: str
     website: Optional[str] = None
-    primary_color: Optional[str] = None   # hex sans '#', ex: "C5A028"
-    logo_url: Optional[str] = None        # URL du logo de la marque
-    cover_image_url: Optional[str] = None
+    primary_color: Optional[str] = None    # hex sans '#', ex: "C5A028"
+    secondary_color: Optional[str] = None  # hex sans '#', ex: "F5F0E8"
+    logo_url: Optional[str] = None         # URL publique ou data:image/... du logo
+    # cover_style: style de la page de couverture
+    #   "brand"   → fond plein couleur primaire + logo centré
+    #   "split"   → bandeau vertical primaire gauche + fond secondaire droite
+    #   "minimal" → fond clair secondaire + barre primaire en bas
+    cover_style: Optional[str] = "brand"
+    # strip_style: style du contour des bandes photo (Freeform 5 & 7, slide 3)
+    #   "primary"   → bordure épaisse couleur primaire
+    #   "secondary" → bordure fine couleur secondaire
+    #   "none"      → aucune bordure (défaut Chanel)
+    strip_style: Optional[str] = "none"
     cabine_top_url: Optional[str] = None
     cabine_bottom_url: Optional[str] = None
     kiosk_url: Optional[str] = None
@@ -161,8 +171,9 @@ def replace_text(slide, old: str, new: str):
 
 
 def _delete_slide(prs, slide_idx: int):
-    """Remove a slide from the presentation by index (slide stays in package but hidden)."""
-    sld_id_lst = prs.presentation.find(qn("p:sldIdLst"))
+    """Remove a slide from the presentation by index."""
+    # prs._element is the CT_Presentation XML element in python-pptx
+    sld_id_lst = prs._element.find(qn("p:sldIdLst"))
     sld_ids = sld_id_lst.findall(qn("p:sldId"))
     sld_id_lst.remove(sld_ids[slide_idx])
 
@@ -237,6 +248,588 @@ def update_cover_texts(slide):
                     new_text = ""  # only update first paragraph
 
 
+# ── Cover helpers ──────────────────────────────────────────────────────────
+
+def _hex(raw: Optional[str], fallback: str = "0D0D0D") -> str:
+    """Normalize a hex color string (strip '#', uppercase, pad to 6)."""
+    if not raw:
+        return fallback.upper()
+    clean = raw.lstrip("#").upper()
+    return clean if len(clean) == 6 else fallback.upper()
+
+
+def _is_dark(hex6: str) -> bool:
+    """Return True if the color is dark (luminance < 0.4)."""
+    try:
+        r, g, b = int(hex6[0:2], 16), int(hex6[2:4], 16), int(hex6[4:6], 16)
+        lum = (0.299 * r + 0.587 * g + 0.114 * b) / 255
+        return lum < 0.55
+    except Exception:
+        return True
+
+
+def _set_slide_bg(slide, hex6: str) -> None:
+    """Fill the slide background with a solid color."""
+    from pptx.dml.color import RGBColor
+    fill = slide.background.fill
+    fill.solid()
+    fill.fore_color.rgb = RGBColor.from_string(hex6)
+
+
+def _add_rect(slide, left, top, width, height, hex6: str, line=False) -> None:
+    """Add a filled rectangle with no border (or thin border if line=True)."""
+    from pptx.dml.color import RGBColor
+    from pptx.util import Pt
+    shape = slide.shapes.add_shape(1, left, top, width, height)  # 1 = rectangle
+    shape.fill.solid()
+    shape.fill.fore_color.rgb = RGBColor.from_string(hex6)
+    if line:
+        shape.line.color.rgb = RGBColor.from_string(hex6)
+        shape.line.width = Pt(0.5)
+    else:
+        shape.line.fill.background()
+
+
+def _add_textbox(slide, left, top, width, height,
+                 text: str, hex6_color: str, font_size_pt: float,
+                 bold=False, letter_spacing_pt=1.5) -> None:
+    """Add a simple single-line text box."""
+    from pptx.dml.color import RGBColor
+    from pptx.util import Pt
+    from pptx.enum.text import PP_ALIGN
+    txBox = slide.shapes.add_textbox(left, top, width, height)
+    tf = txBox.text_frame
+    tf.word_wrap = False
+    p = tf.paragraphs[0]
+    p.alignment = PP_ALIGN.CENTER
+    run = p.add_run()
+    run.text = text
+    run.font.size = Pt(font_size_pt)
+    run.font.bold = bold
+    run.font.color.rgb = RGBColor.from_string(hex6_color)
+    # Approximate letter spacing via character spacing XML
+    try:
+        from lxml import etree as _et
+        from pptx.oxml.ns import qn as _qn
+        rPr = run._r.get_or_add_rPr()
+        rPr.set("spc", str(int(letter_spacing_pt * 100)))
+    except Exception:
+        pass
+
+
+def _add_logo(slide, logo_bytes: bytes, cx: int, cy: int,
+              max_w: int, max_h: int) -> None:
+    """Add logo centered at (cx, cy) within max_w × max_h bounds."""
+    lw, lh = max_w, max_h
+    try:
+        from PIL import Image as _PILImage
+        img = _PILImage.open(io.BytesIO(logo_bytes))
+        iw, ih = img.size
+        img.close()
+        scale = min(max_w / iw, max_h / ih)
+        lw, lh = int(iw * scale), int(ih * scale)
+    except Exception:
+        pass
+    left = cx - lw // 2
+    top  = cy - lh // 2
+    slide.shapes.add_picture(io.BytesIO(logo_bytes), left, top, lw, lh)
+
+
+def _recolor_logo(logo_bytes: bytes, target_hex: str) -> bytes:
+    """
+    Recolorie le logo vers target_hex UNIQUEMENT si le contraste avec le fond
+    est insuffisant (ratio < 2.5) ou si le logo est essentiellement monochrome.
+    Les logos multicolores (Desigual, etc.) sont conservés intacts.
+    """
+    try:
+        from PIL import Image as _PIL
+        img = _PIL.open(io.BytesIO(logo_bytes)).convert("RGBA")
+        data = list(img.getdata())
+
+        # Pixels opaques uniquement
+        opaque = [(r, g, b) for (r, g, b, a) in data if a > 30]
+        if not opaque:
+            return logo_bytes
+
+        # Luminance moyenne du logo
+        def _lum(r, g, b):
+            return (0.299 * r + 0.587 * g + 0.114 * b) / 255
+
+        logo_lum = sum(_lum(*p) for p in opaque) / len(opaque)
+
+        # Luminance du fond cible
+        bg_lum = (
+            0.299 * int(target_hex[:2], 16)
+            + 0.587 * int(target_hex[2:4], 16)
+            + 0.114 * int(target_hex[4:6], 16)
+        ) / 255
+
+        # Ratio de contraste (formule WCAG simplifiée)
+        lighter = max(logo_lum, bg_lum) + 0.05
+        darker  = min(logo_lum, bg_lum) + 0.05
+        contrast = lighter / darker
+
+        # Si contraste suffisant (≥ 2.5) → garder le logo original
+        if contrast >= 2.5:
+            return logo_bytes
+
+        # Contraste insuffisant → vérifier si le logo est multicolore
+        # On calcule l'écart-type de teinte : faible = monochrome, fort = multicolore
+        import colorsys
+        hues = [colorsys.rgb_to_hsv(r/255, g/255, b/255)[0]
+                for (r, g, b) in opaque
+                if max(r, g, b) - min(r, g, b) > 20]  # pixels saturés seulement
+
+        is_multicolor = len(hues) > 50 and (max(hues) - min(hues)) > 0.15
+
+        # Logo multicolore avec mauvais contraste → on ne recolorie pas
+        # (on accepte le rendu tel quel plutôt que de dénaturer la marque)
+        if is_multicolor:
+            return logo_bytes
+
+        # Logo monochrome/neutre avec mauvais contraste → recolorie
+        r_t = int(target_hex[0:2], 16)
+        g_t = int(target_hex[2:4], 16)
+        b_t = int(target_hex[4:6], 16)
+        new_data = [
+            (r_t, g_t, b_t, a) if a > 30 else (r, g, b, 0)
+            for (r, g, b, a) in data
+        ]
+        img.putdata(new_data)
+        out = io.BytesIO()
+        img.save(out, format="PNG")
+        return out.getvalue()
+    except Exception:
+        return logo_bytes
+
+
+def _hide_existing_cover_shapes(slide) -> None:
+    """
+    Masque les formes originales du slide cover Chanel en les rendant
+    invisibles (transparentes) pour ne garder que nos nouvelles formes.
+    """
+    from lxml import etree as _etree
+    for shape in slide.shapes:
+        if shape.name in ("Freeform 2", "Freeform 3"):
+            try:
+                _set_shape_solid_fill(shape, "000000")  # on le peindra ensuite
+                sp_pr = shape._element.find(qn("p:spPr"))
+                if sp_pr is not None:
+                    # Remplacer par noFill
+                    for tag in ("a:blipFill", "a:solidFill", "a:gradFill",
+                                "a:pattFill", "a:noFill"):
+                        el = sp_pr.find(qn(tag))
+                        if el is not None:
+                            sp_pr.remove(el)
+                    _etree.SubElement(sp_pr, qn("a:noFill"))
+            except Exception:
+                pass
+        # TextBox 4 (bas-droite) et TextBox 5 (bas-gauche) sont conservés tels quels :
+        # leur police/espacement du template Chanel est préservé.
+        # Seule leur couleur sera mise à jour via _recolor_cover_texts().
+
+
+def _rebrand_photo_strips(
+    slide, primary: str, secondary: str,
+    brand_name: str, logo_bytes: Optional[bytes]
+) -> None:
+    """
+    Rebrande les strips photo du slide Photobooth Classique (slide 3) :
+    - Freeform 5 (strip vertical, 1 grande photo) :
+        remplace la barre noire du bas (~y=410→bas) avec la couleur primaire
+        de la marque + le nom de la marque en texte centeré.
+    - Freeform 7 (strip 4 photos en grille) :
+        remplace la zone blanche du bas (~y=430→bas) avec la couleur
+        secondaire (ou blanc cassé) + le logo de la marque centeré.
+    Tout le reste (photos, bords arrondis) est conservé intact.
+    """
+    from PIL import Image as _PIL, ImageDraw, ImageFont
+    import os
+
+    def _get_img_and_part(shape):
+        """Retourne (blob bytes, image_part) à partir du blip de la shape."""
+        sp = shape._element
+        blip = sp.find('.//' + qn('a:blip'))
+        if blip is None:
+            return None, None
+        NS = 'http://schemas.openxmlformats.org/officeDocument/2006/relationships'
+        rId = blip.get(f'{{{NS}}}embed')
+        if not rId:
+            return None, None
+        for rel in slide.part.rels.values():
+            if rel.rId == rId and rel.reltype.endswith('/image'):
+                return rel._target.blob, rel._target
+        return None, None
+
+    def _iter(shapes):
+        for s in shapes:
+            yield s
+            if s.shape_type == 6:
+                yield from _iter(s.shapes)
+
+    # Couleurs normalisées
+    # Freeform 5 : fond PRIMAIRE + logo original
+    # Freeform 7 : fond SECONDAIRE clair + texte marque en couleur "accent"
+    pr      = _hex(primary,   "111111")
+    sc_orig = _hex(secondary, "F5F3EE")  # secondaire avant forçage
+    sc      = sc_orig if not _is_dark(sc_orig) else "F5F3EE"   # fond clair garanti
+    pr_rgb  = tuple(int(pr[i:i+2], 16) for i in (0, 2, 4))
+    sc_rgb  = tuple(int(sc[i:i+2], 16) for i in (0, 2, 4))
+
+    # Couleur du texte pour Freeform 7 : si primary trop sombre, utiliser secondary
+    # (ex: Netflix primary=noir → secondary=rouge = couleur identitaire)
+    def _lum6(h6):
+        r,g,b = int(h6[:2],16),int(h6[2:4],16),int(h6[4:],16)
+        return (0.299*r + 0.587*g + 0.114*b) / 255
+    lum_pr = _lum6(pr)
+    lum_bg = _lum6(sc)  # luminance du fond de la barre (clair)
+    sc_orig_rgb = tuple(int(sc_orig[i:i+2], 16) for i in (0, 2, 4))
+    if lum_pr < 0.12 and abs(_lum6(sc_orig) - lum_bg) > 0.25:
+        # Primary trop sombre ET secondary contraste avec le fond → utiliser secondary
+        text7_rgb = sc_orig_rgb
+    else:
+        text7_rgb = pr_rgb
+
+    # Cherche une police accessible
+    _FONT_CANDIDATES = [
+        "/System/Library/Fonts/Helvetica.ttc",
+        "/Library/Fonts/Arial.ttf",
+        "/System/Library/Fonts/SFNS.ttf",
+        "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
+    ]
+    def _load_font(size: int):
+        for fp in _FONT_CANDIDATES:
+            if os.path.exists(fp):
+                try:
+                    return ImageFont.truetype(fp, size=size)
+                except Exception:
+                    pass
+        return ImageFont.load_default()
+
+    for shape in _iter(slide.shapes):
+        if shape.name not in ("Freeform 5", "Freeform 7"):
+            continue
+        blob, img_part = _get_img_and_part(shape)
+        if not blob or not img_part:
+            continue
+
+        img = _PIL.open(io.BytesIO(blob)).convert("RGBA")
+        w, h = img.size
+        draw = ImageDraw.Draw(img)
+
+        if shape.name == "Freeform 5":
+            # ── Barre bas : fond PRIMAIRE + logo couleurs originales ──
+            BAR_Y = int(h * 0.762)  # ~410/538
+            draw.rectangle([(0, BAR_Y), (w, h)], fill=pr_rgb + (255,))
+            zone_h = h - BAR_Y
+
+            if logo_bytes:
+                try:
+                    # Logo couleurs originales préservées (pas de recoloration)
+                    logo_img = _PIL.open(io.BytesIO(logo_bytes)).convert("RGBA")
+                    max_lw = int(w * 0.52)
+                    max_lh = int(zone_h * 0.65)
+                    lw, lh = logo_img.size
+                    scale  = min(max_lw / lw, max_lh / lh)
+                    new_lw = max(1, int(lw * scale))
+                    new_lh = max(1, int(lh * scale))
+                    logo_img = logo_img.resize((new_lw, new_lh), _PIL.LANCZOS)
+                    lx = (w - new_lw) // 2
+                    ly = BAR_Y + (zone_h - new_lh) // 2
+                    img.paste(logo_img, (lx, ly), logo_img)
+                except Exception as e:
+                    print(f"Warning: logo paste on Freeform 5 failed: {e}")
+
+        elif shape.name == "Freeform 7":
+            # ── Zone texte bas : fond SECONDAIRE clair + nom marque en couleur primaire ──
+            LOGO_Y = int(h * 0.799)  # ~430/538
+            draw.rectangle([(0, LOGO_Y), (w, h)], fill=sc_rgb + (255,))
+            bar_h_px = h - LOGO_Y
+
+            # Texte brand name en couleur primaire (ex: rouge Netflix sur fond blanc)
+            text = brand_name.upper()
+            font_size = int(bar_h_px * 0.38)
+            font = _load_font(font_size)
+            for _ in range(8):
+                try:
+                    bb = draw.textbbox((0, 0), text, font=font)
+                    tw = bb[2] - bb[0]
+                except Exception:
+                    tw = len(text) * font_size * 0.6
+                if tw <= w * 0.85:
+                    break
+                font_size = int(font_size * 0.85)
+                font = _load_font(font_size)
+            try:
+                bb = draw.textbbox((0, 0), text, font=font)
+                tw, th = bb[2] - bb[0], bb[3] - bb[1]
+            except Exception:
+                tw, th = len(text) * font_size, font_size
+            tx = (w - tw) // 2
+            ty = LOGO_Y + (bar_h_px - th) // 2
+            # Texte en couleur "accent" de la marque (secondary si primary trop sombre)
+            draw.text((tx, ty), text, fill=text7_rgb + (255,), font=font)
+
+        # Réinjection du blob modifié
+        out = io.BytesIO()
+        img.save(out, format="PNG")
+        img_part._blob = out.getvalue()
+
+
+def _style_photo_strips(slide, primary: str, secondary: str, strip_style: str) -> None:
+    """
+    Applique un contour coloré sur les Freeform 5 et Freeform 7 (slide 3 —
+    les bandes photo). Les bords arrondis et le contenu image sont conservés.
+      "primary"   → trait 3 pt couleur primaire de la marque
+      "secondary" → trait 1.5 pt couleur secondaire
+      "none"      → aucun trait (transparent)
+    """
+    from lxml import etree as _et
+    from pptx.oxml.ns import qn as _qn
+
+    STYLE = (strip_style or "none").lower().strip()
+    TARGET_NAMES = {"Freeform 5", "Freeform 7"}
+
+    # Récupére tous les shapes y compris enfants de groupes
+    def iter_shapes(shapes):
+        for s in shapes:
+            yield s
+            if s.shape_type == 6:  # GROUP
+                yield from iter_shapes(s.shapes)
+
+    for shape in iter_shapes(slide.shapes):
+        if shape.name not in TARGET_NAMES:
+            continue
+        sp_pr = shape._element.find(_qn("p:spPr"))
+        if sp_pr is None:
+            continue
+        # Supprimer l'ancien a:ln s'il existe
+        old_ln = sp_pr.find(_qn("a:ln"))
+        if old_ln is not None:
+            sp_pr.remove(old_ln)
+
+        if STYLE == "none":
+            # Explicit noFill border so PowerPoint doesn’t inherit theme line
+            ln = _et.SubElement(sp_pr, _qn("a:ln"))
+            _et.SubElement(ln, _qn("a:noFill"))
+        else:
+            color_hex = primary if STYLE == "primary" else secondary
+            # Normalise: 6 hex chars, no '#'
+            color_hex = color_hex.lstrip("#").upper().zfill(6)[:6]
+            width_emu = 38100 if STYLE == "primary" else 19050  # 3 pt / 1.5 pt
+            ln = _et.SubElement(sp_pr, _qn("a:ln"), w=str(width_emu))
+            solid = _et.SubElement(ln, _qn("a:solidFill"))
+            _et.SubElement(solid, _qn("a:srgbClr"), val=color_hex)
+
+
+def _bring_cover_texts_to_front(slide) -> None:
+    """
+    Déplace TextBox 4 et TextBox 5 à la fin du spTree (z-order le plus haut)
+    pour qu'ils apparaissent au-dessus des rectangles ajoutés dynamiquement.
+    """
+    sp_tree = slide.shapes._spTree
+    tb4_xml = tb5_xml = None
+    for shape in slide.shapes:
+        if shape.name == "TextBox 4":
+            tb4_xml = shape._element
+        elif shape.name == "TextBox 5":
+            tb5_xml = shape._element
+    for xml_el in [tb4_xml, tb5_xml]:
+        if xml_el is not None and xml_el in sp_tree:
+            sp_tree.remove(xml_el)
+            sp_tree.append(xml_el)
+
+
+def _recolor_cover_texts(slide, color_tb5: str, color_tb4: str) -> None:
+    """
+    Recolorie les runs de TextBox 5 (bas-gauche : PRESENTATION DES SERVICES…)
+    et TextBox 4 (bas-droite : PHOTOBOOTH | BRANDED BOOTH).
+    La police, la taille, l'espacement et le layout du template Chanel sont préservés.
+    """
+    from pptx.dml.color import RGBColor
+    targets = {"TextBox 4": color_tb4, "TextBox 5": color_tb5}
+    for shape in slide.shapes:
+        color = targets.get(shape.name)
+        if color and hasattr(shape, "text_frame"):
+            try:
+                for para in shape.text_frame.paragraphs:
+                    for run in para.runs:
+                        run.font.color.rgb = RGBColor.from_string(color)
+            except Exception:
+                pass
+
+
+# ── 3 styles de cover ──────────────────────────────────────────────────────
+
+def _cover_brand(slide, W, H, primary: str, secondary: str,
+                 logo_bytes: Optional[bytes], brand_name: str) -> None:
+    """
+    Style A — "brand" : fond plein couleur primaire.
+    Logo centré. Ligne fine + sous-titre en bas à gauche.
+    """
+    on_dark = _is_dark(primary)
+    text_color = "FFFFFF" if on_dark else "111111"
+    accent     = secondary if not _is_dark(secondary) else "FFFFFF"
+
+    # Fond plein
+    _set_slide_bg(slide, primary)
+
+    # Ligne horizontale fine sous le logo (80 % largeur)
+    line_w = int(W * 0.80)
+    line_h = int(H * 0.003)
+    _add_rect(slide, (W - line_w) // 2, int(H * 0.64), line_w, line_h, text_color)
+
+    # Logo centré — recolorisé pour contraster avec le fond
+    if logo_bytes:
+        logo_colored = _recolor_logo(logo_bytes, text_color)
+        _add_logo(slide, logo_colored,
+                  cx=W // 2, cy=int(H * 0.42),
+                  max_w=int(W * 0.32), max_h=int(H * 0.35))
+
+    # Texte haut de marque — discret, espacé
+    _add_textbox(slide,
+                 left=int(W * 0.08), top=int(H * 0.06),
+                 width=int(W * 0.84), height=int(H * 0.08),
+                 text=brand_name.upper(),
+                 hex6_color=text_color, font_size_pt=9,
+                 bold=False, letter_spacing_pt=6)
+
+    # Textes bas du template Chanel — police/espacement originaux préservés
+    _recolor_cover_texts(slide, text_color, text_color)
+    _bring_cover_texts_to_front(slide)
+
+
+def _cover_split(slide, W, H, primary: str, secondary: str,
+                 logo_bytes: Optional[bytes], brand_name: str) -> None:
+    """
+    Style B — "split" : bandeau vertical couleur primaire à gauche (42 %),
+    fond secondaire (ou blanc cassé) à droite. Logo centré sur le bandeau.
+    """
+    band_w    = int(W * 0.42)
+    right_bg  = secondary if secondary != primary else "F8F6F2"
+    on_dark_l = _is_dark(primary)
+    on_dark_r = _is_dark(right_bg)
+    text_l    = "FFFFFF" if on_dark_l else "111111"
+    text_r    = "111111" if not on_dark_r else "FFFFFF"
+
+    # Fond droite
+    _set_slide_bg(slide, right_bg)
+
+    # Bandeau gauche
+    _add_rect(slide, 0, 0, band_w, H, primary)
+
+    # Séparateur 1 px entre les deux zones
+    _add_rect(slide, band_w, 0, int(W * 0.003), H, primary)
+
+    # Logo centré dans le bandeau gauche — recolorisé pour contraster avec la bande
+    if logo_bytes:
+        logo_colored = _recolor_logo(logo_bytes, text_l)
+        _add_logo(slide, logo_colored,
+                  cx=band_w // 2, cy=H // 2,
+                  max_w=int(band_w * 0.68), max_h=int(H * 0.38))
+
+    # Nom de marque à droite du bandeau, large et aéré
+    _add_textbox(slide,
+                 left=int(W * 0.47), top=int(H * 0.34),
+                 width=int(W * 0.48), height=int(H * 0.12),
+                 text=brand_name.upper(),
+                 hex6_color=text_r, font_size_pt=18,
+                 bold=True, letter_spacing_pt=8)
+
+    # Textes bas du template Chanel — TextBox 5 (gauche/bande → text_l), TextBox 4 (droite → text_r)
+    _recolor_cover_texts(slide, text_l, text_r)
+    _bring_cover_texts_to_front(slide)
+
+    # Petite ligne déco bas du bandeau
+    _add_rect(slide, int(band_w * 0.12), int(H * 0.82),
+              int(band_w * 0.76), int(H * 0.004), text_l)
+
+
+def _cover_minimal(slide, W, H, primary: str, secondary: str,
+                   logo_bytes: Optional[bytes], brand_name: str) -> None:
+    """
+    Style C — "minimal" : fond clair/secondaire, large barre primaire en bas (28 %).
+    Logo centré dans la zone haute. Très sobre.
+    """
+    light_bg  = secondary if not _is_dark(secondary) else "F5F3EE"
+    text_top  = "111111" if not _is_dark(light_bg) else "FFFFFF"
+
+    # Couleur de la barre : primaire si visible, sinon secondaire (ex: Netflix noir → rouge)
+    # Critère : luminance < 0.12 = trop sombre, on prend la secondaire si elle est plus lisible
+    def _lum_hex(h6):
+        r, g, b = int(h6[:2],16), int(h6[2:4],16), int(h6[4:],16)
+        return (0.299*r + 0.587*g + 0.114*b) / 255
+    bar_color = primary
+    if _lum_hex(primary) < 0.12 and not _is_dark(secondary):
+        bar_color = secondary  # ex: primaire=noir, secondaire=rouge → barre rouge
+    elif _lum_hex(primary) < 0.12:
+        # Les deux sont sombres → on prend primaire mais avec une hauteur réduite
+        bar_color = primary
+    bar_h     = int(H * 0.28)
+    on_dark_b = _is_dark(bar_color)
+    text_b    = "FFFFFF" if on_dark_b else "111111"
+
+    # Fond clair
+    _set_slide_bg(slide, light_bg)
+
+    # Barre en bas (couleur intelligente)
+    _add_rect(slide, 0, H - bar_h, W, bar_h, bar_color)
+
+    # Logo centré dans la zone haute — couleurs originales préservées
+    # Zone utile : dessous du brand name (H*0.13) jusqu'au haut de la barre (H-bar_h)
+    # Centre optique = milieu de cette zone
+    zone_top  = int(H * 0.13)
+    zone_bot  = H - bar_h
+    logo_cy   = (zone_top + zone_bot) // 2
+    if logo_bytes:
+        _add_logo(slide, logo_bytes,
+                  cx=W // 2, cy=logo_cy,
+                  max_w=int(W * 0.35), max_h=int((zone_bot - zone_top) * 0.55))
+
+    # Nom de marque discret au-dessus du logo
+    _add_textbox(slide,
+                 left=int(W * 0.08), top=int(H * 0.06),
+                 width=int(W * 0.84), height=int(H * 0.07),
+                 text=brand_name.upper(),
+                 hex6_color=text_top, font_size_pt=9,
+                 bold=False, letter_spacing_pt=6)
+
+    # Textes bas du template Chanel — dans la barre
+    _recolor_cover_texts(slide, text_b, text_b)
+    _bring_cover_texts_to_front(slide)
+
+
+# ── Dispatcher principal ───────────────────────────────────────────────────
+
+def build_cover(prs, req, logo_bytes: Optional[bytes]) -> None:
+    """
+    Génère la cover (slide 0) selon cover_style :
+      "brand"     → Style A : fond plein couleur primaire, logo centré
+      "split"     → Style B : bandeau vertical primaire + fond secondaire
+      "minimal"   → Style C : fond clair, barre primaire en bas
+
+    Dans tous les cas : pas d'image IA, uniquement logo + géométrie + couleurs.
+    """
+    slide = prs.slides[0]
+    W, H  = prs.slide_width, prs.slide_height
+
+    primary   = _hex(req.primary_color,   "1A1A1A")
+    secondary = _hex(req.secondary_color or req.primary_color, "F5F3EE")
+    brand_name = req.brand_name or ""
+    style      = (req.cover_style or "brand").lower().strip()
+
+    # Masquer les formes Chanel originales (on repart d'une page vierge)
+    _hide_existing_cover_shapes(slide)
+
+    # Dispatcher
+    if style == "split":
+        _cover_split(slide, W, H, primary, secondary, logo_bytes, brand_name)
+    elif style == "minimal":
+        _cover_minimal(slide, W, H, primary, secondary, logo_bytes, brand_name)
+    else:  # "brand" (défaut)
+        _cover_brand(slide, W, H, primary, secondary, logo_bytes, brand_name)
+
+
 @router.post("/generate-presentation")
 def generate_presentation(req: GenerateRequest):
     # Base = Chanel (layout correct : 4 colonnes cabines, 3 colonnes kiosk, 2 goodies)
@@ -254,6 +847,14 @@ def generate_presentation(req: GenerateRequest):
         except Exception as e:
             print(f"Warning: could not delete extra Chanel slide: {e}")
 
+    # ── Logo de la marque (utilisé cover + strips photo) ─────────────────────
+    logo_bytes: Optional[bytes] = None
+    if req.logo_url:
+        try:
+            logo_bytes = get_image_bytes(req.logo_url)
+        except Exception as e:
+            print(f"Warning: logo fetch failed: {e}")
+
     # ── Zones brand à remplacer via replace_blip ──────────────────────────────
     # Slide 0  : Freeform 3 (top-level) = logo marque cover
     # Slide 3  (p4 "Photobooth classique") : deux PETITES images de la bande
@@ -264,13 +865,13 @@ def generate_presentation(req: GenerateRequest):
     # Goodies  (slide 9 après suppression = p11 "Nos goodies") :
     #           → inject_picture_at_shape sur "Group 2" et "Group 4"
     #             (les enfants Freeform 3/5 sont minuscules – l'image est dans le groupe)
+    # Cover (slide 0) est géré séparément par build_cover() — pas de blip ici.
     blip_zones = [
-        (0, "Freeform 3",  req.logo_url),           # logo marque cover (top-level)
-        (3, "Freeform 5",  req.cabine_top_url),     # p4 petite gauche (Group 4 child)
-        (3, "Freeform 7",  req.cabine_bottom_url),  # p4 petite droite (Group 6 child)
+        # Slide 3 Freeform 5 & 7 : PAS d'injection IA — vraies photos Chanel conservées.
+        # Le branding (nom marque + logo) est appliqué via _rebrand_photo_strips().
         (4, "Freeform 25", req.cabine_top_url),     # p5 cabine arrondie
         (4, "Freeform 24", req.cabine_bottom_url),  # p5 cabine carrée
-        (5, "Freeform 8",  req.kiosk_url),          # p6 kiosk (indices non décalés après delete)
+        (5, "Freeform 8",  req.kiosk_url),          # p6 kiosk
     ]
 
     # ── Téléchargements — dédupliqués (même URL peut apparaître sur 2 slides) ──
@@ -314,6 +915,27 @@ def generate_presentation(req: GenerateRequest):
             continue
         if not replace_blip(slide.part, shape, img_bytes):
             print(f"Warning: replace_blip failed for '{name}' on slide {idx}")
+    # ── Bandes photo slide 3 : rebranding CHANEL → marque (nom + logo) ──────────
+    try:
+        _rebrand_photo_strips(
+            prs.slides[3],
+            primary    = _hex(req.primary_color,                         "1A1A1A"),
+            secondary  = _hex(req.secondary_color or req.primary_color,  "F5F3EE"),
+            brand_name = req.brand_name or "",
+            logo_bytes = logo_bytes,
+        )
+    except Exception as e:
+        print(f"Warning: _rebrand_photo_strips failed: {e}")
+    # ── Bandes photo slide 3 : contour de marque sur Freeform 5 & 7 ────────────
+    try:
+        _style_photo_strips(
+            prs.slides[3],
+            primary   = _hex(req.primary_color,              "1A1A1A"),
+            secondary = _hex(req.secondary_color or req.primary_color, "F5F3EE"),
+            strip_style = req.strip_style or "none",
+        )
+    except Exception as e:
+        print(f"Warning: _style_photo_strips failed: {e}")
 
     # ── Goodies : inject_picture_at_shape sur le groupe (overlay fiable) ─────
     # python-pptx conserve les indices ORIGINAUX en mémoire même après _delete_slide.
@@ -337,28 +959,8 @@ def generate_presentation(req: GenerateRequest):
         except Exception as e:
             print(f"Warning: goodies inject failed for '{group_name}': {e}")
 
-    # ── Cover : fond brand + logo centré + textes standard ────────────────────
-    cover_slide = prs.slides[0]
-    # 1. Freeform 2 = fond de la cover → couleur primaire de la marque
-    #    Freeform 3 = emplacement du logo → NE PAS peindre (replace_blip déjà fait ci-dessus)
-    bg_color = req.primary_color.lstrip("#") if req.primary_color else "0D0D0D"
-    shape_bg = get_shape(cover_slide, "Freeform 2")
-    if shape_bg:
-        try:
-            _set_shape_solid_fill(shape_bg, bg_color)
-        except Exception as e:
-            print(f"Warning: fill Freeform 2: {e}")
-    # 2. Fallback si Freeform 3 introuvable : add_picture centré
-    logo_bytes = fetched.get("0_Freeform 3")
-    if logo_bytes and not get_shape(cover_slide, "Freeform 3"):
-        W, H = prs.slide_width, prs.slide_height
-        lw, lh = int(W * 0.22), int(H * 0.22)
-        cover_slide.shapes.add_picture(io.BytesIO(logo_bytes), (W - lw) // 2, (H - lh) // 2, lw, lh)
-    # 3. Textes standard
-    try:
-        update_cover_texts(cover_slide)
-    except Exception as e:
-        print(f"Warning: cover text update failed: {e}")
+    # ── Cover : logo centré + fond uni (3 styles, pas d'image IA) ───────────
+    build_cover(prs, req, logo_bytes)
 
     # ── Remplacement du texte de marque ───────────────────────────────────────
     brand_title = req.brand_name.title()

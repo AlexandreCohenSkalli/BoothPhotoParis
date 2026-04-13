@@ -21,6 +21,8 @@ const schema = z.object({
   logo_url: z.string().optional().nullable(),
   description: z.string().optional(),
   secteur: z.string().optional(),
+  cover_style: z.enum(["brand", "split", "minimal"]).default("brand"),
+  strip_style: z.enum(["primary", "secondary", "none"]).default("none"),
   zones: z
     .object({
       cover_image_url: z.string().nullable().optional(),
@@ -44,7 +46,7 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: parsed.error.flatten() }, { status: 400 })
   }
 
-  const { brand_name, website, primary_color, secondary_color, logo_url, description, secteur, zones: zonesFromClient } = parsed.data
+  const { brand_name, website, primary_color, secondary_color, logo_url, description, secteur, cover_style, strip_style, zones: zonesFromClient } = parsed.data
 
   const brandContext: BrandContext = {
     brandName: brand_name,
@@ -84,7 +86,10 @@ export async function POST(req: NextRequest) {
         brand_name,
         website: website ?? null,
         primary_color: primary_color ?? null,
+        secondary_color: secondary_color ?? null,
         logo_url: logo_url ?? null,
+        cover_style,
+        strip_style,
         ...zones,
       }),
     })

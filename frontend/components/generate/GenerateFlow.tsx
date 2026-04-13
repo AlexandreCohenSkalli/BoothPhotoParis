@@ -51,6 +51,8 @@ export default function GenerateFlow() {
   const [zones, setZones] = useState<Zones | null>(null)
   const [pptxUrl, setPptxUrl] = useState<string | null>(null)
   const [pptxFilename, setPptxFilename] = useState("")
+  const [coverStyle, setCoverStyle] = useState<"brand" | "split" | "minimal">("brand")
+  const [stripStyle, setStripStyle] = useState<"primary" | "secondary" | "none">("none")
 
   async function handleLookup() {
     if (!domain.trim()) return
@@ -137,6 +139,8 @@ export default function GenerateFlow() {
           secondary_color: brand.secondary_color,
           logo_url: brand.logo_url,
           description: brand.description,
+          cover_style: coverStyle,
+          strip_style: stripStyle,
           zones,
         }),
       })
@@ -178,6 +182,8 @@ export default function GenerateFlow() {
     setPptxUrl(null)
     setZones(null)
     setGeneratingZone(0)
+    setCoverStyle("brand")
+    setStripStyle("none")
   }
 
   return (
@@ -286,6 +292,183 @@ export default function GenerateFlow() {
                       {brand.secondary_color}
                     </span>
                   </div>
+                </div>
+              </div>
+
+              {/* ── Cover style picker ── */}
+              <div className="space-y-3">
+                <p className="text-xs font-medium text-muted-foreground uppercase tracking-wider">
+                  Style de couverture
+                </p>
+                <div className="grid grid-cols-3 gap-3">
+                  {(["brand", "split", "minimal"] as const).map((style) => {
+                    const primary   = brand.primary_color  || "#111111"
+                    const secondary = brand.secondary_color || "#F5F3EE"
+                    const logo      = brand.logo_url
+                    // luminance check for text contrast
+                    const isDark = (hex: string) => {
+                      const c = hex.replace("#","")
+                      if (c.length !== 6) return true
+                      const [r,g,b] = [0,2,4].map(i => parseInt(c.slice(i,i+2),16))
+                      return (0.299*r + 0.587*g + 0.114*b)/255 < 0.55
+                    }
+                    const onPrimary   = isDark(primary)   ? "#FFFFFF" : "#111111"
+                    const lightBg     = isDark(secondary) ? "#F5F3EE" : secondary
+                    const onLight     = isDark(lightBg)   ? "#FFFFFF" : "#111111"
+
+                    return (
+                      <button
+                        key={style}
+                        onClick={() => setCoverStyle(style)}
+                        className={cn(
+                          "flex flex-col gap-2 p-2 rounded-xl border-2 transition-all focus:outline-none",
+                          coverStyle === style
+                            ? "border-gold shadow-md scale-[1.02]"
+                            : "border-border hover:border-muted-foreground/40"
+                        )}
+                      >
+                        {/* ── Aperçu 16:9 ── */}
+                        <div
+                          className="relative w-full overflow-hidden rounded-md"
+                          style={{ aspectRatio: "16/9" }}
+                        >
+                          {/* STYLE A — plein fond */}
+                          {style === "brand" && (
+                            <div className="absolute inset-0 flex flex-col" style={{ backgroundColor: primary }}>
+                              {/* top label */}
+                              <div className="flex justify-end px-[6%] pt-[8%]">
+                                <div className="h-[3%] w-[25%] rounded-full opacity-40" style={{ backgroundColor: onPrimary }} />
+                              </div>
+                              {/* logo centré */}
+                              <div className="flex-1 flex items-center justify-center">
+                                {logo ? (
+                                  <img src={logo} alt="" className="max-w-[38%] max-h-[42%] object-contain" style={{ filter: onPrimary === "#FFFFFF" ? "brightness(0) invert(1)" : "none" }} />
+                                ) : (
+                                  <div className="w-[30%] h-[30%] rounded" style={{ backgroundColor: onPrimary, opacity: 0.25 }} />
+                                )}
+                              </div>
+                              {/* ligne fine */}
+                              <div className="mx-[10%] mb-[12%]" style={{ height: 1, backgroundColor: onPrimary, opacity: 0.3 }} />
+                              {/* texte bas */}
+                              <div className="px-[8%] pb-[8%] space-y-[3%]">
+                                <div className="h-[5%] w-[44%] rounded-full opacity-40" style={{ backgroundColor: onPrimary }} />
+                                <div className="h-[3%] w-[62%] rounded-full opacity-25" style={{ backgroundColor: onPrimary }} />
+                              </div>
+                            </div>
+                          )}
+
+                          {/* STYLE B — split vertical */}
+                          {style === "split" && (
+                            <div className="absolute inset-0 flex" style={{ backgroundColor: lightBg }}>
+                              {/* Bande gauche */}
+                              <div className="h-full flex flex-col items-center justify-center" style={{ width: "42%", backgroundColor: primary }}>
+                                {logo ? (
+                                  <img src={logo} alt="" className="max-w-[62%] max-h-[38%] object-contain" style={{ filter: onPrimary === "#FFFFFF" ? "brightness(0) invert(1)" : "none" }} />
+                                ) : (
+                                  <div className="w-[40%] h-[28%] rounded" style={{ backgroundColor: onPrimary, opacity: 0.3 }} />
+                                )}
+                                {/* ligne déco bas */}
+                                <div className="absolute bottom-[12%]" style={{ left: "4%", width: "32%", height: 1, backgroundColor: onPrimary, opacity: 0.35 }} />
+                              </div>
+                              {/* Zone droite */}
+                              <div className="flex-1 flex flex-col justify-center px-[8%] gap-[6%]">
+                                <div className="h-[9%] w-[75%] rounded-full" style={{ backgroundColor: onLight, opacity: 0.8 }} />
+                                <div className="h-[5%] w-[55%] rounded-full" style={{ backgroundColor: onLight, opacity: 0.4 }} />
+                                <div className="h-[3%] w-[80%] rounded-full" style={{ backgroundColor: onLight, opacity: 0.25 }} />
+                              </div>
+                            </div>
+                          )}
+
+                          {/* STYLE C — minimal barre bas */}
+                          {style === "minimal" && (
+                            <div className="absolute inset-0 flex flex-col" style={{ backgroundColor: lightBg }}>
+                              {/* label haut */}
+                              <div className="px-[8%] pt-[7%]">
+                                <div className="h-[4%] w-[28%] rounded-full" style={{ backgroundColor: onLight, opacity: 0.3 }} />
+                              </div>
+                              {/* logo centré dans zone haute (72%) */}
+                              <div className="flex-1 flex items-center justify-center" style={{ maxHeight: "64%" }}>
+                                {logo ? (
+                                  <img src={logo} alt="" className="max-w-[35%] max-h-[55%] object-contain" />
+                                ) : (
+                                  <div className="w-[28%] h-[28%] rounded" style={{ backgroundColor: onLight, opacity: 0.2 }} />
+                                )}
+                              </div>
+                              {/* barre primaire bas */}
+                              <div className="flex flex-col justify-center px-[8%] gap-[5%]" style={{ height: "28%", backgroundColor: primary }}>
+                                <div className="h-[14%] w-[48%] rounded-full" style={{ backgroundColor: onPrimary, opacity: 0.8 }} />
+                                <div className="h-[9%] w-[70%] rounded-full" style={{ backgroundColor: onPrimary, opacity: 0.4 }} />
+                              </div>
+                            </div>
+                          )}
+                        </div>
+
+                        {/* Label sous l'aperçu */}
+                        <p className={cn(
+                          "text-[11px] font-medium text-center leading-tight transition-colors",
+                          coverStyle === style ? "text-gold" : "text-muted-foreground"
+                        )}>
+                          {style === "brand" ? "Plein fond" : style === "split" ? "Bandeau" : "Minimal"}
+                        </p>
+                      </button>
+                    )
+                  })}
+                </div>
+              </div>
+
+              {/* ── Strip style picker ── */}
+              <div className="space-y-3">
+                <p className="text-xs font-medium text-muted-foreground uppercase tracking-wider">
+                  Contour bandes photo
+                </p>
+                <div className="grid grid-cols-3 gap-3">
+                  {([
+                    { value: "none"      as const, label: "Aucun",      desc: "Chanel (défaut)" },
+                    { value: "primary"   as const, label: "Primaire",   desc: "Épais, couleur marque" },
+                    { value: "secondary" as const, label: "Secondaire", desc: "Fin, couleur secondaire" },
+                  ]).map((opt) => {
+                    const color = opt.value === "primary"
+                      ? (brand.primary_color || "#111111")
+                      : opt.value === "secondary"
+                        ? (brand.secondary_color || "#F5F3EE")
+                        : "transparent"
+                    const borderW = opt.value === "primary" ? 3 : opt.value === "secondary" ? 1.5 : 0
+                    return (
+                      <button
+                        key={opt.value}
+                        onClick={() => setStripStyle(opt.value)}
+                        className={cn(
+                          "flex flex-col items-center gap-2 p-2 rounded-xl border-2 transition-all focus:outline-none",
+                          stripStyle === opt.value
+                            ? "border-gold shadow-md scale-[1.02]"
+                            : "border-border hover:border-muted-foreground/40"
+                        )}
+                      >
+                        {/* Mini aperçu bande photo */}
+                        <div
+                          className="w-10 rounded overflow-hidden bg-muted"
+                          style={{
+                            aspectRatio: "9/16",
+                            outline: borderW > 0 ? `${borderW}px solid ${color}` : "none",
+                            outlineOffset: "-1px",
+                          }}
+                        >
+                          {/* Simulation de 4 photos */}
+                          <div className="w-full h-full grid grid-cols-2 gap-[1px] p-[2px] bg-black">
+                            {[0,1,2,3].map(i => (
+                              <div key={i} className="bg-muted-foreground/30 rounded-[1px]" />
+                            ))}
+                          </div>
+                        </div>
+                        <p className={cn(
+                          "text-[11px] font-medium text-center leading-tight transition-colors",
+                          stripStyle === opt.value ? "text-gold" : "text-muted-foreground"
+                        )}>
+                          {opt.label}
+                        </p>
+                      </button>
+                    )
+                  })}
                 </div>
               </div>
 
