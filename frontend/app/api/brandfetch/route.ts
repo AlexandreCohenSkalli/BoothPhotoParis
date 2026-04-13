@@ -62,6 +62,15 @@ export async function GET(req: NextRequest) {
       logos.find((l) => l.format === "png") ??
       logos[0]
 
+    // Best icon/symbol (the standalone mark — e.g. the Netflix “N”, the Apple apple)
+    const bestIcon =
+      logos.find((l) => l.format === "png" && l.type === "icon") ??
+      logos.find((l) => l.format === "svg" && l.type === "icon") ??
+      logos.find((l) => l.format === "png" && l.type === "symbol") ??
+      logos.find((l) => l.type === "icon") ??
+      logos.find((l) => l.type === "symbol") ??
+      null
+
     // Extract primary and secondary colors
     const colors = (data.colors ?? []).map((c: { hex: string; type: string }) => ({
       hex: c.hex,
@@ -98,6 +107,7 @@ export async function GET(req: NextRequest) {
       domain: cleanDomain,
       description: data.description ?? "",
       logo_url: bestLogo?.url ?? null,
+      logo_icon_url: bestIcon?.url ?? null,
       primary_color: primaryColor,
       secondary_color: secondaryColor,
       all_colors: colors,

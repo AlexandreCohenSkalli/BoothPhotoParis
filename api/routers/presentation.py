@@ -29,7 +29,8 @@ class GenerateRequest(BaseModel):
     website: Optional[str] = None
     primary_color: Optional[str] = None    # hex sans '#', ex: "C5A028"
     secondary_color: Optional[str] = None  # hex sans '#', ex: "F5F0E8"
-    logo_url: Optional[str] = None         # URL publique ou data:image/... du logo
+    logo_url: Optional[str] = None         # URL publique ou data:image/... du logo (wordmark)
+    logo_icon_url: Optional[str] = None     # URL de l'icône/symbole (ex: le «N» de Netflix)
     # cover_style: style de la page de couverture
     #   "brand"   → fond plein couleur primaire + logo centré
     #   "split"   → bandeau vertical primaire gauche + fond secondaire droite
@@ -431,7 +432,8 @@ def _hide_existing_cover_shapes(slide) -> None:
 
 def _rebrand_photo_strips(
     slide, primary: str, secondary: str,
-    brand_name: str, logo_bytes: Optional[bytes]
+    brand_name: str, logo_bytes: Optional[bytes],
+    logo_icon_bytes: Optional[bytes] = None
 ) -> None:
     """
     Rebrande les strips photo du slide Photobooth Classique (slide 3) :
@@ -443,7 +445,7 @@ def _rebrand_photo_strips(
         secondaire (ou blanc cassé) + le logo de la marque centeré.
     Tout le reste (photos, bords arrondis) est conservé intact.
     """
-    from PIL import Image as _PIL, ImageDraw, ImageFont
+    from PIL import Image as _PIL, ImageDraw
     import os
 
     def _get_img_and_part(shape):
@@ -469,42 +471,12 @@ def _rebrand_photo_strips(
 
     # Couleurs normalisées
     # Freeform 5 : fond PRIMAIRE + logo original
-    # Freeform 7 : fond SECONDAIRE clair + texte marque en couleur "accent"
+    # Freeform 7 : fond SECONDAIRE clair + logo original (le vrai logo Brandfetch)
     pr      = _hex(primary,   "111111")
     sc_orig = _hex(secondary, "F5F3EE")  # secondaire avant forçage
     sc      = sc_orig if not _is_dark(sc_orig) else "F5F3EE"   # fond clair garanti
     pr_rgb  = tuple(int(pr[i:i+2], 16) for i in (0, 2, 4))
     sc_rgb  = tuple(int(sc[i:i+2], 16) for i in (0, 2, 4))
-
-    # Couleur du texte pour Freeform 7 : si primary trop sombre, utiliser secondary
-    # (ex: Netflix primary=noir → secondary=rouge = couleur identitaire)
-    def _lum6(h6):
-        r,g,b = int(h6[:2],16),int(h6[2:4],16),int(h6[4:],16)
-        return (0.299*r + 0.587*g + 0.114*b) / 255
-    lum_pr = _lum6(pr)
-    lum_bg = _lum6(sc)  # luminance du fond de la barre (clair)
-    sc_orig_rgb = tuple(int(sc_orig[i:i+2], 16) for i in (0, 2, 4))
-    if lum_pr < 0.12 and abs(_lum6(sc_orig) - lum_bg) > 0.25:
-        # Primary trop sombre ET secondary contraste avec le fond → utiliser secondary
-        text7_rgb = sc_orig_rgb
-    else:
-        text7_rgb = pr_rgb
-
-    # Cherche une police accessible
-    _FONT_CANDIDATES = [
-        "/System/Library/Fonts/Helvetica.ttc",
-        "/Library/Fonts/Arial.ttf",
-        "/System/Library/Fonts/SFNS.ttf",
-        "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
-    ]
-    def _load_font(size: int):
-        for fp in _FONT_CANDIDATES:
-            if os.path.exists(fp):
-                try:
-                    return ImageFont.truetype(fp, size=size)
-                except Exception:
-                    pass
-        return ImageFont.load_default()
 
     for shape in _iter(slide.shapes):
         if shape.name not in ("Freeform 5", "Freeform 7"):
@@ -541,34 +513,28 @@ def _rebrand_photo_strips(
                     print(f"Warning: logo paste on Freeform 5 failed: {e}")
 
         elif shape.name == "Freeform 7":
-            # ── Zone texte bas : fond SECONDAIRE clair + nom marque en couleur primaire ──
+            # ── Zone logo bas : fond SECONDAIRE clair + icône/symbole Brandfetch ──
             LOGO_Y = int(h * 0.799)  # ~430/538
             draw.rectangle([(0, LOGO_Y), (w, h)], fill=sc_rgb + (255,))
-            bar_h_px = h - LOGO_Y
+            zone_h = h - LOGO_Y
 
-            # Texte brand name en couleur primaire (ex: rouge Netflix sur fond blanc)
-            text = brand_name.upper()
-            font_size = int(bar_h_px * 0.38)
-            font = _load_font(font_size)
-            for _ in range(8):
+            # Utilise l'icône (ex: «N» Netflix) si dispo, sinon logo principal
+            _icon = logo_icon_bytes if logo_icon_bytes else logo_bytes
+            if _icon:
                 try:
-                    bb = draw.textbbox((0, 0), text, font=font)
-                    tw = bb[2] - bb[0]
-                except Exception:
-                    tw = len(text) * font_size * 0.6
-                if tw <= w * 0.85:
-                    break
-                font_size = int(font_size * 0.85)
-                font = _load_font(font_size)
-            try:
-                bb = draw.textbbox((0, 0), text, font=font)
-                tw, th = bb[2] - bb[0], bb[3] - bb[1]
-            except Exception:
-                tw, th = len(text) * font_size, font_size
-            tx = (w - tw) // 2
-            ty = LOGO_Y + (bar_h_px - th) // 2
-            # Texte en couleur "accent" de la marque (secondary si primary trop sombre)
-            draw.text((tx, ty), text, fill=text7_rgb + (255,), font=font)
+                    logo_img = _PIL.open(io.BytesIO(_icon)).convert("RGBA")
+                    max_lw = int(w * 0.70)   # plus large que Freeform 5 car c'est le wordmark
+                    max_lh = int(zone_h * 0.60)
+                    lw, lh = logo_img.size
+                    scale  = min(max_lw / lw, max_lh / lh)
+                    new_lw = max(1, int(lw * scale))
+                    new_lh = max(1, int(lh * scale))
+                    logo_img = logo_img.resize((new_lw, new_lh), _PIL.LANCZOS)
+                    lx = (w - new_lw) // 2
+                    ly = LOGO_Y + (zone_h - new_lh) // 2
+                    img.paste(logo_img, (lx, ly), logo_img)
+                except Exception as e:
+                    print(f"Warning: logo paste on Freeform 7 failed: {e}")
 
         # Réinjection du blob modifié
         out = io.BytesIO()
@@ -854,7 +820,16 @@ def generate_presentation(req: GenerateRequest):
             logo_bytes = get_image_bytes(req.logo_url)
         except Exception as e:
             print(f"Warning: logo fetch failed: {e}")
-
+    # Icône/symbole séparé (ex: le «N» de Netflix pour Freeform 7)
+    # Si absent, on réutilise le logo principal
+    logo_icon_bytes: Optional[bytes] = None
+    if req.logo_icon_url:
+        try:
+            logo_icon_bytes = get_image_bytes(req.logo_icon_url)
+        except Exception as e:
+            print(f"Warning: logo_icon fetch failed: {e}")
+    if logo_icon_bytes is None:
+        logo_icon_bytes = logo_bytes  # fallback : même logo que Freeform 5
     # ── Zones brand à remplacer via replace_blip ──────────────────────────────
     # Slide 0  : Freeform 3 (top-level) = logo marque cover
     # Slide 3  (p4 "Photobooth classique") : deux PETITES images de la bande
@@ -922,7 +897,8 @@ def generate_presentation(req: GenerateRequest):
             primary    = _hex(req.primary_color,                         "1A1A1A"),
             secondary  = _hex(req.secondary_color or req.primary_color,  "F5F3EE"),
             brand_name = req.brand_name or "",
-            logo_bytes = logo_bytes,
+            logo_bytes = logo_bytes,       # wordmark → Freeform 5 (fond primaire)
+            logo_icon_bytes = logo_icon_bytes,  # icône → Freeform 7 (fond secondaire)
         )
     except Exception as e:
         print(f"Warning: _rebrand_photo_strips failed: {e}")

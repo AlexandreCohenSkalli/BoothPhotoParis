@@ -17,6 +17,7 @@ interface BrandData {
   name: string
   domain: string
   logo_url: string | null
+  logo_icon_url: string | null
   primary_color: string
   secondary_color: string
   description: string
@@ -138,6 +139,7 @@ export default function GenerateFlow() {
           primary_color: brand.primary_color,
           secondary_color: brand.secondary_color,
           logo_url: brand.logo_url,
+          logo_icon_url: brand.logo_icon_url,
           description: brand.description,
           cover_style: coverStyle,
           strip_style: stripStyle,
