@@ -87,20 +87,34 @@ function base(brand: BrandContext): string {
 
 /** Return a venue / atmosphere description tuned to the brand's sector. */
 function secteurVenue(brand: BrandContext): string {
-  if (brand.description) {
-    return `a luxurious event venue fitting the "${brand.brandName}" universe`
-  }
-  const s = (brand.secteur ?? "").toLowerCase()
-  if (s.includes("luxe"))        return "an opulent palace ballroom with marble floors, gilded mirrors, crystal chandeliers and lush floral arrangements"
-  if (s.includes("beaut"))       return "a sleek cosmetics launch event space with white walls, pastel florals, warm spotlights and beauty editorial props"
-  if (s.includes("mode") || s.includes("fashion")) return "a high-fashion runway or Parisian atelier loft with exposed brick, dramatic lighting and clothes racks in soft bokeh"
-  if (s.includes("tech"))        return "a futuristic tech conference hall with LED walls, cool blue and purple uplighting and a sleek industrial feel"
-  if (s.includes("corporate"))   return "a modern corporate event venue with clean architectural lines, neutral tones, blue accent lighting and branded signage"
-  if (s.includes("mariage") || s.includes("vénem")) return "an enchanted outdoor wedding reception with fairy lights, lush rose garlands, draped white fabric and candlelit tables"
-  if (s.includes("art") || s.includes("culture"))  return "a contemporary art gallery with white walls, track lighting and sculptural installations in soft bokeh"
-  if (s.includes("food") || s.includes("boisson")) return "a chic restaurant launch or rooftop cocktail party with warm Edison lights, wooden decor and artisan food displays"
-  if (s.includes("sport"))       return "a dynamic sports arena or exclusive athletic brand activation space with bold lighting and energetic crowd in bokeh"
-  if (s.includes("retail"))      return "a luxury flagship store opening with sleek wall displays, spotlit product shelves and a stylish crowd in bokeh"
+  // Combine description + secteur for keyword matching — description from Brandfetch
+  // is usually rich enough (e.g. "Luxury fashion house", "Global tech company", etc.)
+  const s = [brand.secteur ?? "", brand.description ?? ""].join(" ").toLowerCase()
+
+  if (s.includes("luxe") || s.includes("luxury") || s.includes("haute couture") || s.includes("maison"))
+    return "an opulent palace ballroom with marble floors, gilded mirrors, crystal chandeliers and lush floral arrangements"
+  if (s.includes("beaut") || s.includes("cosmetic") || s.includes("skincare") || s.includes("parfum") || s.includes("fragrance"))
+    return "a sleek cosmetics launch event space with white walls, pastel florals, warm spotlights and beauty editorial props"
+  if (s.includes("mode") || s.includes("fashion") || s.includes("apparel") || s.includes("clothing") || s.includes("textile") || s.includes("wear"))
+    return "a high-fashion runway or Parisian atelier loft with exposed brick, dramatic lighting and clothes racks in soft bokeh"
+  if (s.includes("tech") || s.includes("software") || s.includes("digital") || s.includes("saas") || s.includes("startup") || s.includes("cloud"))
+    return "a futuristic tech conference hall with LED walls, cool blue and purple uplighting and a sleek industrial feel"
+  if (s.includes("auto") || s.includes("voiture") || s.includes("car") || s.includes("moteur") || s.includes("motor") || s.includes("vehicle"))
+    return "a sleek automotive showroom with polished concrete floors, dramatic spotlights and a hero car on a rotating platform in bokeh"
+  if (s.includes("corporate") || s.includes("consulting") || s.includes("finance") || s.includes("bank") || s.includes("insurance") || s.includes("assur"))
+    return "a modern corporate event venue with clean architectural lines, neutral tones, blue accent lighting and branded signage"
+  if (s.includes("mariage") || s.includes("wedding") || s.includes("événem") || s.includes("event planning"))
+    return "an enchanted outdoor wedding reception with fairy lights, lush rose garlands, draped white fabric and candlelit tables"
+  if (s.includes("art") || s.includes("culture") || s.includes("museum") || s.includes("galerie") || s.includes("gallery") || s.includes("musée"))
+    return "a contemporary art gallery with white walls, track lighting and sculptural installations in soft bokeh"
+  if (s.includes("food") || s.includes("restaurant") || s.includes("boisson") || s.includes("beverage") || s.includes("drink") || s.includes("wine") || s.includes("champagne"))
+    return "a chic restaurant launch or rooftop cocktail party with warm Edison lights, wooden decor and artisan food displays"
+  if (s.includes("sport") || s.includes("fitness") || s.includes("athletic") || s.includes("footwear") || s.includes("running"))
+    return "a dynamic sports arena or exclusive athletic brand activation space with bold lighting and energetic crowd in bokeh"
+  if (s.includes("retail") || s.includes("boutique") || s.includes("store") || s.includes("shop") || s.includes("commerce"))
+    return "a luxury flagship store opening with sleek wall displays, spotlit product shelves and a stylish crowd in bokeh"
+  if (s.includes("media") || s.includes("entertainment") || s.includes("music") || s.includes("streaming") || s.includes("film") || s.includes("tv"))
+    return "a glamorous entertainment industry event with a red carpet, dramatic uplighting, press photographers in bokeh and a stage backdrop"
   return "an elegant Parisian event space with high ceilings, warm golden chandeliers, marble floors and floral arrangements"
 }
 
@@ -123,14 +137,15 @@ export function promptCover(brand: BrandContext): string {
  *
  * TWO DISTINCT MODELS:
  *
- * MODEL 1 (top / Freeform 25) — "Cabine Arrondie" — Roland Garros style:
- *   - Rounded outer corners on all edges (large radius)
- *   - Large ROUNDED arch door opening on the front face (arch is smooth and wide)
- *   - Vertical fabric curtains hanging inside the arch, slightly parted
- *   - Photo print dispensing slot on the left panel (horizontal rectangle)
- *   - Brand logo circle/badge on the top-left of front face
- *   - Exterior fully wrapped in brand color, matte finish
- *   - Photorealistic render, slight 3/4 front angle, outdoor or neutral background
+ * MODEL 1 (top / Freeform 25) — "Cabine Arrondie" — Dior/Roland Garros style:
+ *   - Wide and deep body — almost cubic, wider than it looks tall
+ *   - Large rounded arch opening (not full height) — SHORT curtains, padded bench/seat visible at the bottom
+ *   - Heavily rounded outer corners on ALL edges and faces (large corner radius)
+ *   - Exterior fully wrapped in solid brand color, matte premium finish
+ *   - Brand logo vertical on left face + large brand name on right side panel
+ *   - Photo print dispensing slot on the front left panel
+ *   - 3/4 front-left angle showing front arch face AND right side panel
+ *   - Real event atmosphere behind (bokeh)
  *
  * MODEL 2 (bottom / Freeform 24) — "Cabine Carrée" — QVEMA/SketchUp style:
  *   - Perfectly rectangular box, sharp 90° corners, no rounding
@@ -142,17 +157,21 @@ export function promptCover(brand: BrandContext): string {
  */
 export function promptCabine(brand: BrandContext, angle: "top" | "bottom"): string {
   if (angle === "top") {
-    // Vue 1 — cabine arrondie dans un vrai décor événementiel
+    // Vue 1 — Cabine arrondie style Dior : large, profonde, coins arrondis, siège visible
     const venueStyle = secteurVenue(brand)
     return [
-      `Editorial photograph of a branded photo booth cabine at a real event for "${brand.brandName}".`,
-      "The photo booth is a tall box with a large rounded-arch door opening on the front face. Vertical fabric curtains hanging inside the arch opening. Dispensing print slot on the side.",
+      `High-end editorial photograph of a luxury branded photo booth at a real event for "${brand.brandName}".`,
+      "The photo booth is a large wide box — wider and deeper than a standard cabine, almost cubic proportions.",
+      "ALL outer corners and edges are heavily rounded with a large radius, giving a soft premium look on every face.",
+      "Front face has a tall rounded arch opening (not as tall as the full machine height). SHORT fabric curtains hang inside the arch — they stop mid-way, clearly showing a padded bench/seat at the bottom inside the booth.",
+      "Front left panel has a horizontal print dispensing slot and a small camera lens.",
       brand.primaryColor
-        ? `Entire exterior wrapped in ${brand.primaryColor}, matte premium finish.`
-        : "Exterior in a rich solid brand color, matte premium finish.",
-      `"${brand.brandName}" logo badge on the front face.`,
-      `Scene: ${venueStyle}. The booth stands centered on the venue floor. Rich atmospheric background — guests mingling in soft bokeh behind, warm uplighting on the booth. Elegant, aspirational mood.`,
-      "FULL MACHINE IN FRAME — entire booth visible head to toe, floor contact visible. Camera pulled back wide. Cinematic editorial quality photography. No people inside the booth.",
+        ? `Entire exterior — all faces — wrapped in solid ${brand.primaryColor}, matte premium finish.`
+        : "Entire exterior in a rich solid brand color, matte premium finish.",
+      `Brand logo printed vertically large on the left side face. Brand name "${brand.brandName}" printed large on the right side panel.`,
+      `Camera at 3/4 angle showing the arch front face and the right side panel simultaneously.`,
+      `Scene: ${venueStyle}. The booth stands on the venue floor, guests in soft bokeh behind, warm uplighting. Elegant aspirational atmosphere.`,
+      "FULL MACHINE IN FRAME — entire booth head to toe, floor contact visible. Nothing cropped. No people inside the booth.",
     ].filter(Boolean).join(" ")
   } else {
     // Vue 2 — rendu SketchUp technique fidèle à l'image de référence Booth/Chanel

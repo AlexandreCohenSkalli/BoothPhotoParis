@@ -2,6 +2,7 @@
 
 import { useState } from "react"
 import Image from "next/image"
+import { createClient } from "@/lib/supabase/client"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
@@ -9,7 +10,7 @@ import { Card, CardContent } from "@/components/ui/card"
 import { useToast } from "@/hooks/use-toast"
 import {
   Loader2, Search, Sparkles, Download, CheckCircle2,
-  Globe, Palette, RefreshCw, ChevronRight
+  Globe, Palette, RefreshCw, ChevronRight, Eye, ChevronLeft, X
 } from "lucide-react"
 import { cn } from "@/lib/utils"
 
@@ -21,6 +22,7 @@ interface BrandData {
   primary_color: string
   secondary_color: string
   description: string
+  secteur?: string  // from Supabase brands table
 }
 
 type Step = "input" | "preview" | "generating" | "done"
@@ -54,6 +56,39 @@ export default function GenerateFlow() {
   const [pptxFilename, setPptxFilename] = useState("")
   const [coverStyle, setCoverStyle] = useState<"brand" | "split" | "minimal">("brand")
   const [stripStyle, setStripStyle] = useState<"primary" | "secondary" | "none">("none")
+  const [previewSlides, setPreviewSlides] = useState<(string | null)[] | null>(null)
+  const [slideIndex, setSlideIndex]     = useState(0)
+  const [previewing, setPreviewing]     = useState(false)
+
+  async function handlePreview() {
+    if (!brand) return
+    setPreviewing(true)
+    setPreviewSlides(null)
+    try {
+      const res = await fetch("/api/preview-slides", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          brand_name: brand.name,
+          website: brand.domain,
+          primary_color: brand.primary_color,
+          secondary_color: brand.secondary_color,
+          logo_url: brand.logo_url,
+          logo_icon_url: brand.logo_icon_url,
+          cover_style: coverStyle,
+          strip_style: stripStyle,
+        }),
+      })
+      if (!res.ok) throw new Error("Preview failed")
+      const data = await res.json()
+      setPreviewSlides(data.slides)
+      setSlideIndex(0)
+    } catch (err) {
+      toast({ title: "Aperçu échoué", description: String(err), variant: "destructive" })
+    } finally {
+      setPreviewing(false)
+    }
+  }
 
   async function handleLookup() {
     if (!domain.trim()) return
@@ -65,6 +100,18 @@ export default function GenerateFlow() {
         throw new Error(err.error ?? "Brand not found")
       }
       const data = await res.json()
+      // Enrichir avec le secteur depuis Supabase (si la marque existe déjà)
+      try {
+        const supabase = createClient()
+        const { data: sbBrand } = await supabase
+          .from("brands")
+          .select("secteur")
+          .ilike("name", data.name)
+          .maybeSingle() as { data: { secteur: string | null } | null }
+        if (sbBrand?.secteur) data.secteur = sbBrand.secteur
+      } catch {
+        // Supabase lookup non bloquant
+      }
       setBrand(data)
       setStep("preview")
     } catch (err) {
@@ -100,6 +147,7 @@ export default function GenerateFlow() {
           secondary_color: brand.secondary_color,
           logo_url: brand.logo_url,
           description: brand.description,
+          secteur: brand.secteur,
         }),
       })
 
@@ -186,6 +234,8 @@ export default function GenerateFlow() {
     setGeneratingZone(0)
     setCoverStyle("brand")
     setStripStyle("none")
+    setPreviewSlides(null)
+    setSlideIndex(0)
   }
 
   return (
@@ -532,6 +582,15 @@ export default function GenerateFlow() {
               Changer
             </Button>
             <Button
+              variant="outline"
+              onClick={handlePreview}
+              disabled={previewing}
+              className="gap-2"
+            >
+              {previewing ? <Loader2 className="w-4 h-4 animate-spin" /> : <Eye className="w-4 h-4" />}
+              {previewing ? "Rendu..." : "Aperçu"}
+            </Button>
+            <Button
               variant="gold"
               onClick={zones ? handleExportPptx : handleGenerate}
               className="flex-1 gap-2"
@@ -541,6 +600,65 @@ export default function GenerateFlow() {
               <ChevronRight className="w-4 h-4" />
             </Button>
           </div>
+
+          {/* ── Slide preview carousel ── */}
+          {previewSlides && previewSlides.length > 0 && (
+            <div className="mt-4 space-y-3">
+              <div className="flex items-center justify-between">
+                <p className="text-xs font-medium text-muted-foreground uppercase tracking-wider">
+                  Aperçu — slide {slideIndex + 1} / {previewSlides.length}
+                </p>
+                <button
+                  onClick={() => setPreviewSlides(null)}
+                  className="text-muted-foreground hover:text-foreground"
+                >
+                  <X className="w-4 h-4" />
+                </button>
+              </div>
+              <div className="relative w-full overflow-hidden rounded-xl border border-border bg-black"
+                   style={{ aspectRatio: "16/9" }}>
+                {previewSlides[slideIndex] ? (
+                  <img
+                    src={previewSlides[slideIndex]!}
+                    alt={`Slide ${slideIndex + 1}`}
+                    className="w-full h-full object-contain"
+                  />
+                ) : (
+                  <div className="w-full h-full flex items-center justify-center text-muted-foreground text-sm">
+                    Slide non renderisée
+                  </div>
+                )}
+                {/* Nav arrows */}
+                <button
+                  onClick={() => setSlideIndex(i => Math.max(0, i - 1))}
+                  disabled={slideIndex === 0}
+                  className="absolute left-2 top-1/2 -translate-y-1/2 bg-black/50 hover:bg-black/70 text-white rounded-full p-1.5 disabled:opacity-20 transition"
+                >
+                  <ChevronLeft className="w-5 h-5" />
+                </button>
+                <button
+                  onClick={() => setSlideIndex(i => Math.min(previewSlides.length - 1, i + 1))}
+                  disabled={slideIndex === previewSlides.length - 1}
+                  className="absolute right-2 top-1/2 -translate-y-1/2 bg-black/50 hover:bg-black/70 text-white rounded-full p-1.5 disabled:opacity-20 transition"
+                >
+                  <ChevronRight className="w-5 h-5" />
+                </button>
+              </div>
+              {/* Dot nav */}
+              <div className="flex justify-center gap-1.5 flex-wrap">
+                {previewSlides.map((_, i) => (
+                  <button
+                    key={i}
+                    onClick={() => setSlideIndex(i)}
+                    className={cn(
+                      "w-2 h-2 rounded-full transition-all",
+                      i === slideIndex ? "bg-gold scale-125" : "bg-muted-foreground/30 hover:bg-muted-foreground/60"
+                    )}
+                  />
+                ))}
+              </div>
+            </div>
+          )}
         </div>
       )}
 

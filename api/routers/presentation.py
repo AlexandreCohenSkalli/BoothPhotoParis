@@ -796,6 +796,83 @@ def build_cover(prs, req, logo_bytes: Optional[bytes]) -> None:
         _cover_brand(slide, W, H, primary, secondary, logo_bytes, brand_name)
 
 
+# ─── Cabine carrée : extraction + branding Pillow ─────────────────────────────
+
+def _extract_shape_image(pptx_path: str, slide_idx: int, shape_name: str) -> Optional[bytes]:
+    """Extracts the raw image bytes from a shape's blip in a PPTX file."""
+    try:
+        from pptx import Presentation as _Presentation
+        _prs = _Presentation(pptx_path)
+        _slide = _prs.slides[slide_idx]
+        _shape = get_shape(_slide, shape_name)
+        if _shape is None:
+            return None
+        blip = _shape.element.find('.//' + qn('a:blip'))
+        if blip is None:
+            return None
+        rId = blip.get(f'{{{NS_R}}}embed')
+        if not rId:
+            return None
+        return _slide.part.related_parts[rId].blob
+    except Exception as e:
+        print(f"_extract_shape_image({shape_name}) failed: {e}")
+        return None
+
+
+def _brand_cabine_carre(
+    img_bytes: bytes,
+    primary_hex: str,
+    logo_bytes: Optional[bytes],
+    flip: bool = True,
+) -> bytes:
+    """
+    Brands the carrée cabine image:
+    - Paints the right-side panel with the brand's primary color (semi-transparent
+      so the 3D booth structure / shadows remain visible)
+    - Pastes the brand wordmark logo centred on the panel
+    - Optionally flips the image horizontally (so the two cabines face opposite ways)
+    Returns PNG bytes.
+    """
+    from PIL import Image as _Image, ImageDraw as _ImageDraw
+    import io as _io
+    img = _Image.open(_io.BytesIO(img_bytes)).convert("RGBA")
+    W, H = img.size
+
+    # Parse hex color
+    hex_clean = primary_hex.lstrip("#")
+    r, g, b = int(hex_clean[0:2], 16), int(hex_clean[2:4], 16), int(hex_clean[4:6], 16)
+
+    # Right side panel bounding box (approximate for the Chanel SketchUp model)
+    px1, py1 = int(W * 0.54), int(H * 0.04)
+    px2, py2 = int(W * 0.97), int(H * 0.95)
+
+    # Semi-transparent fill (alpha 170/255 ~67%) keeps booth depth visible
+    overlay = _Image.new("RGBA", img.size, (0, 0, 0, 0))
+    _ImageDraw.Draw(overlay).rectangle([px1, py1, px2, py2], fill=(r, g, b, 170))
+    img = _Image.alpha_composite(img, overlay)
+
+    # Paste logo centred on the panel
+    if logo_bytes:
+        try:
+            logo = _Image.open(_io.BytesIO(logo_bytes)).convert("RGBA")
+            panel_w, panel_h = px2 - px1, py2 - py1
+            max_w, max_h = int(panel_w * 0.62), int(panel_h * 0.38)
+            scale = min(max_w / logo.width, max_h / logo.height)
+            logo = logo.resize((int(logo.width * scale), int(logo.height * scale)), _Image.LANCZOS)
+            cx = px1 + panel_w // 2 - logo.width // 2
+            cy = py1 + panel_h // 2 - logo.height // 2
+            img.paste(logo, (cx, cy), logo)
+        except Exception as e:
+            print(f"_brand_cabine_carre logo paste failed: {e}")
+
+    if flip:
+        img = img.transpose(_Image.FLIP_LEFT_RIGHT)
+
+    out = _io.BytesIO()
+    img.convert("RGB").save(out, format="PNG")
+    return out.getvalue()
+
+
 @router.post("/generate-presentation")
 def generate_presentation(req: GenerateRequest):
     # Base = Chanel (layout correct : 4 colonnes cabines, 3 colonnes kiosk, 2 goodies)
@@ -844,8 +921,9 @@ def generate_presentation(req: GenerateRequest):
     blip_zones = [
         # Slide 3 Freeform 5 & 7 : PAS d'injection IA — vraies photos Chanel conservées.
         # Le branding (nom marque + logo) est appliqué via _rebrand_photo_strips().
-        (4, "Freeform 25", req.cabine_top_url),     # p5 cabine arrondie
-        (4, "Freeform 24", req.cabine_bottom_url),  # p5 cabine carrée
+        (4, "Freeform 25", req.cabine_top_url),     # p5 cabine arrondie — image Imagen
+        # Freeform 24 (carrée) : PAS d'URL externe — on extrait depuis le template Chanel
+        # et on applique Pillow overlay juste après la boucle blip_zones ci-dessous.
         (5, "Freeform 8",  req.kiosk_url),          # p6 kiosk
     ]
 
@@ -890,6 +968,31 @@ def generate_presentation(req: GenerateRequest):
             continue
         if not replace_blip(slide.part, shape, img_bytes):
             print(f"Warning: replace_blip failed for '{name}' on slide {idx}")
+
+    # ── Cabine carrée (Freeform 24) : overlay Pillow sur image Chanel ────────────
+    # On extrait l'image originale du template Chanel et on l'adapte à la marque.
+    # Pas d'appel Imagen : la forme 3D de la cabine carrée est toujours celle de Chanel.
+    try:
+        chanel_f24_bytes = _extract_shape_image(base_path, 4, "Freeform 24")
+        if chanel_f24_bytes:
+            branded_f24 = _brand_cabine_carre(
+                chanel_f24_bytes,
+                primary_hex = _hex(req.primary_color, "1A1A1A"),
+                logo_bytes  = logo_bytes,
+                flip        = True,   # F24 regarde à gauche, F25 à droite
+            )
+            slide4 = prs.slides[4]
+            shape_f24 = get_shape(slide4, "Freeform 24")
+            if shape_f24 is not None:
+                if not replace_blip(slide4.part, shape_f24, branded_f24):
+                    print("Warning: replace_blip failed for branded Freeform 24")
+            else:
+                print("Warning: Freeform 24 not found on slide 4")
+        else:
+            print("Warning: could not extract Freeform 24 image from Chanel template")
+    except Exception as e:
+        print(f"Warning: _brand_cabine_carre failed: {e}")
+
     # ── Bandes photo slide 3 : rebranding CHANEL → marque (nom + logo) ──────────
     try:
         _rebrand_photo_strips(
@@ -960,6 +1063,202 @@ def generate_presentation(req: GenerateRequest):
         media_type="application/vnd.openxmlformats-officedocument.presentationml.presentation",
         headers={"Content-Disposition": f'attachment; filename="{fname}"'},
     )
+
+
+# ── Renderer Pillow : slide → PNG ──────────────────────────────────────────
+
+def _render_slide_png(slide, prs, thumb_w: int = 1280) -> bytes:
+    """
+    Rendu basique d'un slide en PNG via Pillow.
+    Gère : fond, rectangles colorés, images (blip), groupes.
+    Suffisant pour un aperçu de développement.
+    """
+    from PIL import Image as _PIL, ImageDraw as _IDraw, ImageFont as _IFont
+    from pptx.enum.dml import MSO_THEME_COLOR
+    from pptx.dml.color import RGBColor
+
+    W_emu = prs.slide_width
+    H_emu = prs.slide_height
+    scale  = thumb_w / W_emu
+    thumb_h = int(H_emu * scale)
+
+    # --- fond ---
+    bg_color = (255, 255, 255)
+    try:
+        bg_fill = slide.background.fill
+        if bg_fill.type is not None:
+            c = bg_fill.fore_color.rgb
+            bg_color = (c.r, c.g, c.b)
+    except Exception:
+        pass
+    canvas = _PIL.new("RGB", (thumb_w, thumb_h), bg_color)
+
+    def _emu_rect(shape):
+        x = int(shape.left  * scale)
+        y = int(shape.top   * scale)
+        w = int(shape.width * scale)
+        h = int(shape.height * scale)
+        return x, y, w, h
+
+    def _try_get_blip_bytes(shape):
+        sp = shape._element
+        blip = sp.find('.//' + qn('a:blip'))
+        if blip is None:
+            return None
+        rId = blip.get(f'{{{NS_R}}}embed')
+        if not rId:
+            return None
+        try:
+            for rel in slide.part.rels.values():
+                if rel.rId == rId and rel.reltype.endswith('/image'):
+                    return rel._target.blob
+        except Exception:
+            pass
+        return None
+
+    def _render_shape(shape):
+        try:
+            x, y, w, h = _emu_rect(shape)
+            if w <= 0 or h <= 0:
+                return
+        except Exception:
+            return
+
+        # Groupe → recurse
+        if shape.shape_type == 6:
+            for child in shape.shapes:
+                _render_shape(child)
+            return
+
+        draw = _IDraw.Draw(canvas)
+
+        # Image (blip)
+        blob = _try_get_blip_bytes(shape)
+        if blob:
+            try:
+                img = _PIL.open(io.BytesIO(blob)).convert("RGBA")
+                img = img.resize((max(1, w), max(1, h)), _PIL.LANCZOS)
+                canvas.paste(img, (x, y), img)
+                return
+            except Exception:
+                pass
+
+        # Solid fill
+        try:
+            fill = shape.fill
+            if fill.type is not None:
+                try:
+                    c = fill.fore_color.rgb
+                    draw.rectangle([x, y, x + w, y + h], fill=(c.r, c.g, c.b))
+                    return
+                except Exception:
+                    pass
+        except Exception:
+            pass
+
+        # Text box avec fill transparent → dessine le texte
+        try:
+            if shape.has_text_frame:
+                tf = shape.text_frame
+                txt = tf.text.strip()
+                if txt:
+                    font_size = max(10, int(12 * scale * 914400 / 12700))  # approx
+                    try:
+                        font = _IFont.truetype("/System/Library/Fonts/Helvetica.ttc", size=max(8, int(h * 0.4)))
+                    except Exception:
+                        font = _IFont.load_default()
+                    draw.text((x + 4, y + 2), txt, fill=(80, 80, 80), font=font)
+        except Exception:
+            pass
+
+    for shape in slide.shapes:
+        _render_shape(shape)
+
+    out = io.BytesIO()
+    canvas.save(out, format="PNG", optimize=True)
+    return out.getvalue()
+
+
+@router.post("/preview-slides")
+def preview_slides(req: GenerateRequest):
+    """
+    Génère le PPTX (cover + slide 3 rebranding, SANS images IA)
+    et renvoie les thumbnails PNG en base64 — un par slide.
+    Endpoint local dev uniquement, pas d'appel Imagen.
+    """
+    import json as _json
+
+    prs = Presentation(CHANEL_PATH)
+
+    # Même logique que generate_presentation mais sans les zones IA
+    try:
+        _delete_slide(prs, 8)
+    except Exception:
+        pass
+
+    # Logo
+    logo_bytes: Optional[bytes] = None
+    if req.logo_url:
+        try:
+            logo_bytes = get_image_bytes(req.logo_url)
+        except Exception as e:
+            print(f"Preview: logo fetch failed: {e}")
+
+    logo_icon_bytes: Optional[bytes] = None
+    if req.logo_icon_url:
+        try:
+            logo_icon_bytes = get_image_bytes(req.logo_icon_url)
+        except Exception as e:
+            print(f"Preview: logo_icon fetch failed: {e}")
+    if logo_icon_bytes is None:
+        logo_icon_bytes = logo_bytes
+
+    # Slide 3 : rebranding strips
+    try:
+        _rebrand_photo_strips(
+            prs.slides[3],
+            primary    = _hex(req.primary_color,                        "1A1A1A"),
+            secondary  = _hex(req.secondary_color or req.primary_color, "F5F3EE"),
+            brand_name = req.brand_name or "",
+            logo_bytes = logo_bytes,
+            logo_icon_bytes = logo_icon_bytes,
+        )
+    except Exception as e:
+        print(f"Preview: _rebrand_photo_strips failed: {e}")
+
+    try:
+        _style_photo_strips(
+            prs.slides[3],
+            primary     = _hex(req.primary_color,                         "1A1A1A"),
+            secondary   = _hex(req.secondary_color or req.primary_color,  "F5F3EE"),
+            strip_style = req.strip_style or "none",
+        )
+    except Exception as e:
+        print(f"Preview: _style_photo_strips failed: {e}")
+
+    # Cover
+    build_cover(prs, req, logo_bytes)
+
+    # Remplacement texte
+    brand_title = req.brand_name.title()
+    brand_upper = req.brand_name.upper()
+    for slide in prs.slides:
+        replace_text(slide, "CHANEL", brand_upper)
+        replace_text(slide, "Chanel", brand_title)
+        replace_text(slide, "chanel", req.brand_name.lower())
+
+    # Render chaque slide en PNG
+    slides_b64 = []
+    for slide in prs.slides:
+        try:
+            png = _render_slide_png(slide, prs, thumb_w=1280)
+            slides_b64.append("data:image/png;base64," + base64.b64encode(png).decode())
+        except Exception as e:
+            print(f"Preview: render failed for slide: {e}")
+            slides_b64.append(None)
+
+    from fastapi.responses import JSONResponse
+    return JSONResponse({"slides": slides_b64})
 
 
 @router.get("/health")
