@@ -41,11 +41,15 @@ class GenerateRequest(BaseModel):
     #   "secondary" → bordure fine couleur secondaire
     #   "none"      → aucune bordure (défaut Chanel)
     strip_style: Optional[str] = "none"
-    cabine_top_url: Optional[str] = None
-    cabine_bottom_url: Optional[str] = None
+    cabine_top_url: Optional[str] = None       # legacy
+    cabine_bottom_url: Optional[str] = None    # legacy
+    cabine_ronde_url: Optional[str] = None     # Gemini image-to-image — Freeform 25
+    cabine_carree_url: Optional[str] = None    # Gemini image-to-image — Freeform 24
     kiosk_url: Optional[str] = None
     goodies_top_url: Optional[str] = None
     goodies_bottom_url: Optional[str] = None
+    # 3 images brand pour les slots de la cabine carrée (optionnel — générées si absentes)
+    cabine_slot_urls: Optional[list] = None
 
 
 def get_image_bytes(url_or_data: str) -> bytes:
@@ -336,10 +340,11 @@ def _add_logo(slide, logo_bytes: bytes, cx: int, cy: int,
     slide.shapes.add_picture(io.BytesIO(logo_bytes), left, top, lw, lh)
 
 
-def _recolor_logo(logo_bytes: bytes, target_hex: str) -> bytes:
+def _recolor_logo(logo_bytes: bytes, bg_hex: str) -> bytes:
     """
-    Recolorie le logo vers target_hex UNIQUEMENT si le contraste avec le fond
-    est insuffisant (ratio < 2.5) ou si le logo est essentiellement monochrome.
+    Recolorie le logo pour qu'il soit visible sur bg_hex (la couleur de fond).
+    Si le contraste est insuffisant (ratio < 2.5) et que le logo est monochrome,
+    recolorie vers blanc (fond sombre) ou noir (fond clair).
     Les logos multicolores (Desigual, etc.) sont conservés intacts.
     """
     try:
@@ -358,11 +363,12 @@ def _recolor_logo(logo_bytes: bytes, target_hex: str) -> bytes:
 
         logo_lum = sum(_lum(*p) for p in opaque) / len(opaque)
 
-        # Luminance du fond cible
+        # Luminance du fond réel sur lequel le logo sera posé
+        clean_bg = bg_hex.lstrip("#").upper().zfill(6)[:6]
         bg_lum = (
-            0.299 * int(target_hex[:2], 16)
-            + 0.587 * int(target_hex[2:4], 16)
-            + 0.114 * int(target_hex[4:6], 16)
+            0.299 * int(clean_bg[0:2], 16)
+            + 0.587 * int(clean_bg[2:4], 16)
+            + 0.114 * int(clean_bg[4:6], 16)
         ) / 255
 
         # Ratio de contraste (formule WCAG simplifiée)
@@ -370,12 +376,11 @@ def _recolor_logo(logo_bytes: bytes, target_hex: str) -> bytes:
         darker  = min(logo_lum, bg_lum) + 0.05
         contrast = lighter / darker
 
-        # Si contraste suffisant (≥ 2.5) → garder le logo original
-        if contrast >= 2.5:
+        # Si contraste suffisant (≥ 3.0) → garder le logo original
+        if contrast >= 3.0:
             return logo_bytes
 
         # Contraste insuffisant → vérifier si le logo est multicolore
-        # On calcule l'écart-type de teinte : faible = monochrome, fort = multicolore
         import colorsys
         hues = [colorsys.rgb_to_hsv(r/255, g/255, b/255)[0]
                 for (r, g, b) in opaque
@@ -384,14 +389,15 @@ def _recolor_logo(logo_bytes: bytes, target_hex: str) -> bytes:
         is_multicolor = len(hues) > 50 and (max(hues) - min(hues)) > 0.15
 
         # Logo multicolore avec mauvais contraste → on ne recolorie pas
-        # (on accepte le rendu tel quel plutôt que de dénaturer la marque)
         if is_multicolor:
             return logo_bytes
 
-        # Logo monochrome/neutre avec mauvais contraste → recolorie
-        r_t = int(target_hex[0:2], 16)
-        g_t = int(target_hex[2:4], 16)
-        b_t = int(target_hex[4:6], 16)
+        # Logo monochrome/neutre avec mauvais contraste → recolorie vers couleur contrastante
+        # Fond sombre → logo blanc ; fond clair → logo noir
+        if bg_lum < 0.5:
+            r_t, g_t, b_t = 255, 255, 255   # blanc sur fond sombre
+        else:
+            r_t, g_t, b_t = 17,  17,  17    # quasi-noir sur fond clair
         new_data = [
             (r_t, g_t, b_t, a) if a > 30 else (r, g, b, 0)
             for (r, g, b, a) in data
@@ -490,15 +496,16 @@ def _rebrand_photo_strips(
         draw = ImageDraw.Draw(img)
 
         if shape.name == "Freeform 5":
-            # ── Barre bas : fond PRIMAIRE + logo couleurs originales ──
+            # ── Barre bas : fond PRIMAIRE + logo recolorisé pour contraste ──
             BAR_Y = int(h * 0.762)  # ~410/538
             draw.rectangle([(0, BAR_Y), (w, h)], fill=pr_rgb + (255,))
             zone_h = h - BAR_Y
 
             if logo_bytes:
                 try:
-                    # Logo couleurs originales préservées (pas de recoloration)
-                    logo_img = _PIL.open(io.BytesIO(logo_bytes)).convert("RGBA")
+                    # Logo recolorisé pour être visible sur fond primaire
+                    _logo_vis = _recolor_logo(logo_bytes, pr)
+                    logo_img = _PIL.open(io.BytesIO(_logo_vis)).convert("RGBA")
                     max_lw = int(w * 0.52)
                     max_lh = int(zone_h * 0.65)
                     lw, lh = logo_img.size
@@ -645,9 +652,9 @@ def _cover_brand(slide, W, H, primary: str, secondary: str,
     line_h = int(H * 0.003)
     _add_rect(slide, (W - line_w) // 2, int(H * 0.64), line_w, line_h, text_color)
 
-    # Logo centré — recolorisé pour contraster avec le fond
+    # Logo centré — recolorisé pour contraster avec le fond (on passe la couleur du fond)
     if logo_bytes:
-        logo_colored = _recolor_logo(logo_bytes, text_color)
+        logo_colored = _recolor_logo(logo_bytes, primary)
         _add_logo(slide, logo_colored,
                   cx=W // 2, cy=int(H * 0.42),
                   max_w=int(W * 0.32), max_h=int(H * 0.35))
@@ -689,7 +696,7 @@ def _cover_split(slide, W, H, primary: str, secondary: str,
 
     # Logo centré dans le bandeau gauche — recolorisé pour contraster avec la bande
     if logo_bytes:
-        logo_colored = _recolor_logo(logo_bytes, text_l)
+        logo_colored = _recolor_logo(logo_bytes, primary)
         _add_logo(slide, logo_colored,
                   cx=band_w // 2, cy=H // 2,
                   max_w=int(band_w * 0.68), max_h=int(H * 0.38))
@@ -819,54 +826,169 @@ def _extract_shape_image(pptx_path: str, slide_idx: int, shape_name: str) -> Opt
         return None
 
 
+# Chemins vers les modèles neutres
+MODELE_CARRE_PATH = os.path.join(os.path.dirname(__file__), "..", "..", "exemple", "modeleclassiquecarre.jpeg")
+MODELE_ROND_PATH  = os.path.join(os.path.dirname(__file__), "..", "..", "exemple", "modeleclassiquerond.jpeg")
+
+
 def _brand_cabine_carre(
-    img_bytes: bytes,
     primary_hex: str,
     logo_bytes: Optional[bytes],
-    flip: bool = True,
+    slot_images: Optional[list] = None,   # list of up to 3 bytes objects
+    brand_name: str = "",
 ) -> bytes:
     """
-    Brands the carrée cabine image:
-    - Paints the right-side panel with the brand's primary color (semi-transparent
-      so the 3D booth structure / shadows remain visible)
-    - Pastes the brand wordmark logo centred on the panel
-    - Optionally flips the image horizontally (so the two cabines face opposite ways)
-    Returns PNG bytes.
+    Rebrande le modèle neutre carrée (modeleclassiquecarre.jpeg) :
+    • Grand panneau DROIT  → couleur primaire (semi-transparent) + logo centré
+    • 3 slots BLANCS gauche → photos brand (sans fond ajouté)
+    • Texte "BOOTH" recouvert par le nom de marque (police système clean)
+    Coordonnées calibrées sur l'image 1024×1022.
     """
-    from PIL import Image as _Image, ImageDraw as _ImageDraw
+    from PIL import Image as _Image, ImageDraw as _IDraw, ImageFont as _IFont
     import io as _io
-    img = _Image.open(_io.BytesIO(img_bytes)).convert("RGBA")
-    W, H = img.size
 
-    # Parse hex color
+    with open(MODELE_CARRE_PATH, "rb") as f:
+        base_bytes = f.read()
+
+    img = _Image.open(_io.BytesIO(base_bytes)).convert("RGBA")
+    W, H = img.size  # 1024 × 1022
+
     hex_clean = primary_hex.lstrip("#")
     r, g, b = int(hex_clean[0:2], 16), int(hex_clean[2:4], 16), int(hex_clean[4:6], 16)
 
-    # Right side panel bounding box (approximate for the Chanel SketchUp model)
-    px1, py1 = int(W * 0.54), int(H * 0.04)
-    px2, py2 = int(W * 0.97), int(H * 0.95)
-
-    # Semi-transparent fill (alpha 170/255 ~67%) keeps booth depth visible
+    # ── Panneau DROIT : fond couleur primaire semi-transparent ──────────────
+    # Le panneau blanc droit est ~x: 51%-70%, y: 13%-83%
+    px1, py1 = int(W * 0.512), int(H * 0.130)
+    px2, py2 = int(W * 0.700), int(H * 0.835)
     overlay = _Image.new("RGBA", img.size, (0, 0, 0, 0))
-    _ImageDraw.Draw(overlay).rectangle([px1, py1, px2, py2], fill=(r, g, b, 170))
+    _IDraw.Draw(overlay).rectangle([px1, py1, px2, py2], fill=(r, g, b, 210))
     img = _Image.alpha_composite(img, overlay)
 
-    # Paste logo centred on the panel
+    # Logo centré sur le panneau droit
     if logo_bytes:
         try:
             logo = _Image.open(_io.BytesIO(logo_bytes)).convert("RGBA")
-            panel_w, panel_h = px2 - px1, py2 - py1
-            max_w, max_h = int(panel_w * 0.62), int(panel_h * 0.38)
-            scale = min(max_w / logo.width, max_h / logo.height)
-            logo = logo.resize((int(logo.width * scale), int(logo.height * scale)), _Image.LANCZOS)
-            cx = px1 + panel_w // 2 - logo.width // 2
-            cy = py1 + panel_h // 2 - logo.height // 2
-            img.paste(logo, (cx, cy), logo)
+            pw, ph = px2 - px1, py2 - py1
+            max_w, max_h = int(pw * 0.70), int(ph * 0.35)
+            sc = min(max_w / logo.width, max_h / logo.height)
+            logo = logo.resize((max(1, int(logo.width * sc)), max(1, int(logo.height * sc))), _Image.LANCZOS)
+            img.paste(logo, (px1 + (pw - logo.width) // 2, py1 + (ph - logo.height) // 2), logo)
         except Exception as e:
             print(f"_brand_cabine_carre logo paste failed: {e}")
 
-    if flip:
-        img = img.transpose(_Image.FLIP_LEFT_RIGHT)
+    # ── 3 slots GAUCHE : photos brand ───────────────────────────────────────
+    # Coordonnées calibrées sur l'image 1024×1022 :
+    #   Slot 1 (haut-gauche) :  x: 12.2%-21.0%, y: 21.7%-29.4%
+    #   Slot 2 (haut-droite) :  x: 22.0%-29.4%, y: 21.7%-29.4%
+    #   Slot 3 (bas, plus grand): x: 12.2%-21.0%, y: 30.5%-45.2%
+    slots = [
+        (int(W*0.122), int(H*0.217), int(W*0.210), int(H*0.294)),  # haut-gauche
+        (int(W*0.220), int(H*0.217), int(W*0.294), int(H*0.294)),  # haut-droite
+        (int(W*0.122), int(H*0.305), int(W*0.210), int(H*0.452)),  # bas (plus haut)
+    ]
+    if slot_images:
+        for i, (sx1, sy1, sx2, sy2) in enumerate(slots):
+            if i >= len(slot_images) or not slot_images[i]:
+                continue
+            try:
+                simg = _Image.open(_io.BytesIO(slot_images[i])).convert("RGBA")
+                sw, sh = sx2 - sx1, sy2 - sy1
+                # Cover crop : on remplit le slot sans bande noire
+                src_ratio = simg.width / simg.height
+                slot_ratio = sw / sh
+                if src_ratio > slot_ratio:
+                    new_h = sh
+                    new_w = int(sh * src_ratio)
+                else:
+                    new_w = sw
+                    new_h = int(sw / src_ratio)
+                simg = simg.resize((new_w, new_h), _Image.LANCZOS)
+                # Centrer et cropper
+                cx_off = (new_w - sw) // 2
+                cy_off = (new_h - sh) // 2
+                simg = simg.crop((cx_off, cy_off, cx_off + sw, cy_off + sh))
+                img.paste(simg, (sx1, sy1), simg)
+            except Exception as e:
+                print(f"_brand_cabine_carre slot {i} failed: {e}")
+
+    # ── Nom de marque par-dessus "BOOTH" ─────────────────────────────────────
+    if brand_name:
+        try:
+            draw = _IDraw.Draw(img)
+            # "BOOTH" est ~x: 13%-27%, y: 16%-21%
+            tx, ty = int(W * 0.130), int(H * 0.160)
+            tbox_w, tbox_h = int(W * 0.150), int(H * 0.055)
+            # Peindre par-dessus le texte Booth existant (même couleur bois ~sombre)
+            # On overlay avec la couleur primaire
+            text_bg_overlay = _Image.new("RGBA", img.size, (0, 0, 0, 0))
+            _IDraw.Draw(text_bg_overlay).rectangle(
+                [tx - 4, ty - 2, tx + tbox_w + 4, ty + tbox_h + 2],
+                fill=(r, g, b, 230)
+            )
+            img = _Image.alpha_composite(img, text_bg_overlay)
+            # Texte blanc
+            try:
+                font_size = max(14, int(tbox_h * 0.65))
+                font = _IFont.truetype("/System/Library/Fonts/Helvetica.ttc", font_size)
+            except Exception:
+                font = _IFont.load_default()
+            draw = _IDraw.Draw(img)
+            brand_upper = brand_name.upper()
+            try:
+                bbox = draw.textbbox((0, 0), brand_upper, font=font)
+                tw = bbox[2] - bbox[0]
+            except Exception:
+                tw = len(brand_upper) * font_size // 2
+            draw.text((tx + (tbox_w - tw) // 2, ty + (tbox_h - font_size) // 2),
+                      brand_upper, fill=(255, 255, 255, 255), font=font)
+        except Exception as e:
+            print(f"_brand_cabine_carre brand name overlay failed: {e}")
+
+    out = _io.BytesIO()
+    img.convert("RGB").save(out, format="PNG")
+    return out.getvalue()
+
+
+def _brand_cabine_ronde(
+    primary_hex: str,
+    logo_bytes: Optional[bytes],
+    brand_name: str = "",
+) -> bytes:
+    """
+    Rebrande le modèle neutre rond (modeleclassiquerond.jpeg) :
+    • Panneau principal → couleur primaire semi-transparent + logo centré
+    Coordonnées calibrées sur l'image 819×1024.
+    """
+    from PIL import Image as _Image, ImageDraw as _IDraw, ImageFont as _IFont
+    import io as _io
+
+    with open(MODELE_ROND_PATH, "rb") as f:
+        base_bytes = f.read()
+
+    img = _Image.open(_io.BytesIO(base_bytes)).convert("RGBA")
+    W, H = img.size  # 819 × 1024
+
+    hex_clean = primary_hex.lstrip("#")
+    r, g, b = int(hex_clean[0:2], 16), int(hex_clean[2:4], 16), int(hex_clean[4:6], 16)
+
+    # Panneau principal de la cabine ronde : ~x: 10%-85%, y: 8%-88%
+    px1, py1 = int(W * 0.10), int(H * 0.08)
+    px2, py2 = int(W * 0.85), int(H * 0.88)
+    overlay = _Image.new("RGBA", img.size, (0, 0, 0, 0))
+    _IDraw.Draw(overlay).rectangle([px1, py1, px2, py2], fill=(r, g, b, 180))
+    img = _Image.alpha_composite(img, overlay)
+
+    # Logo centré sur le panneau
+    if logo_bytes:
+        try:
+            logo = _Image.open(_io.BytesIO(logo_bytes)).convert("RGBA")
+            pw, ph = px2 - px1, py2 - py1
+            max_w, max_h = int(pw * 0.60), int(ph * 0.25)
+            sc = min(max_w / logo.width, max_h / logo.height)
+            logo = logo.resize((max(1, int(logo.width * sc)), max(1, int(logo.height * sc))), _Image.LANCZOS)
+            img.paste(logo, (px1 + (pw - logo.width) // 2, py1 + (ph - logo.height) // 2), logo)
+        except Exception as e:
+            print(f"_brand_cabine_ronde logo paste failed: {e}")
 
     out = _io.BytesIO()
     img.convert("RGB").save(out, format="PNG")
@@ -921,30 +1043,16 @@ def generate_presentation(req: GenerateRequest):
     blip_zones = [
         # Slide 3 Freeform 5 & 7 : PAS d'injection IA — vraies photos Chanel conservées.
         # Le branding (nom marque + logo) est appliqué via _rebrand_photo_strips().
-        (4, "Freeform 25", req.cabine_top_url),     # p5 cabine arrondie — image Imagen
-        # Freeform 24 (carrée) : PAS d'URL externe — on extrait depuis le template Chanel
-        # et on applique Pillow overlay juste après la boucle blip_zones ci-dessous.
-        (5, "Freeform 8",  req.kiosk_url),          # p6 kiosk
+        (5, "Freeform 8", req.kiosk_url),  # p6 kiosk
     ]
 
-    # ── Téléchargements — dédupliqués (même URL peut apparaître sur 2 slides) ──
+    # ── Téléchargements — images kiosk uniquement ────────────────────────────
     import time
     fetched: dict[str, bytes] = {}
-    # Deduplicate by URL so we download each image only once
-    seen_urls: dict[str, str] = {}  # url → first key
-    items: list[tuple[str, str]] = []
     for idx, name, url in blip_zones:
         if not url:
             continue
-        if url not in seen_urls:
-            key = f"{idx}_{name}"
-            seen_urls[url] = key
-            items.append((key, url))
-        # else: we'll resolve via seen_urls at apply time
-
-    for i, (key, url) in enumerate(items):
-        if i > 0 and not url.startswith("data:"):
-            time.sleep(1)
+        key = f"{idx}_{name}"
         try:
             fetched[key] = get_image_bytes(url)
         except Exception as e:
@@ -954,10 +1062,7 @@ def generate_presentation(req: GenerateRequest):
     for idx, name, url in blip_zones:
         if not url:
             continue
-        # Resolve bytes: use original key if this url was deduped
         key = f"{idx}_{name}"
-        if key not in fetched:
-            key = seen_urls.get(url, key)
         img_bytes = fetched.get(key)
         if not img_bytes:
             continue
@@ -966,32 +1071,70 @@ def generate_presentation(req: GenerateRequest):
         if shape is None:
             print(f"Warning: shape '{name}' not found on slide {idx}")
             continue
-        if not replace_blip(slide.part, shape, img_bytes):
-            print(f"Warning: replace_blip failed for '{name}' on slide {idx}")
-
-    # ── Cabine carrée (Freeform 24) : overlay Pillow sur image Chanel ────────────
-    # On extrait l'image originale du template Chanel et on l'adapte à la marque.
-    # Pas d'appel Imagen : la forme 3D de la cabine carrée est toujours celle de Chanel.
-    try:
-        chanel_f24_bytes = _extract_shape_image(base_path, 4, "Freeform 24")
-        if chanel_f24_bytes:
-            branded_f24 = _brand_cabine_carre(
-                chanel_f24_bytes,
-                primary_hex = _hex(req.primary_color, "1A1A1A"),
-                logo_bytes  = logo_bytes,
-                flip        = True,   # F24 regarde à gauche, F25 à droite
-            )
-            slide4 = prs.slides[4]
-            shape_f24 = get_shape(slide4, "Freeform 24")
-            if shape_f24 is not None:
-                if not replace_blip(slide4.part, shape_f24, branded_f24):
-                    print("Warning: replace_blip failed for branded Freeform 24")
-            else:
-                print("Warning: Freeform 24 not found on slide 4")
+        # Use replace_blip_contained for kiosk to avoid stretching
+        if name == "Freeform 8":
+            if not replace_blip_contained(slide.part, shape, img_bytes):
+                print(f"Warning: replace_blip_contained failed for '{name}' on slide {idx}")
         else:
-            print("Warning: could not extract Freeform 24 image from Chanel template")
+            if not replace_blip(slide.part, shape, img_bytes):
+                print(f"Warning: replace_blip failed for '{name}' on slide {idx}")
+
+    # ── Slots images cabine carrée : téléchargement ──────────────────────────
+    slot_images: list = []
+    if req.cabine_slot_urls:
+        for i, slot_url in enumerate(req.cabine_slot_urls[:3]):
+            if not slot_url:
+                slot_images.append(None)
+                continue
+            try:
+                slot_images.append(get_image_bytes(slot_url))
+            except Exception as e:
+                print(f"Warning: cabine slot {i} fetch failed: {e}")
+                slot_images.append(None)
+
+    primary_h = _hex(req.primary_color, "1A1A1A")
+    slide4 = prs.slides[4]
+
+    # ── Cabine CARRÉE (Freeform 24) ──────────────────────────────────────────
+    # Priority: AI image from Gemini → fallback to Pillow local model
+    try:
+        if req.cabine_carree_url:
+            branded_f24 = get_image_bytes(req.cabine_carree_url)
+        else:
+            branded_f24 = _brand_cabine_carre(
+                primary_hex  = primary_h,
+                logo_bytes   = logo_bytes,
+                slot_images  = slot_images or None,
+                brand_name   = req.brand_name or "",
+            )
+        shape_f24 = get_shape(slide4, "Freeform 24")
+        if shape_f24 is not None:
+            if not replace_blip(slide4.part, shape_f24, branded_f24):
+                print("Warning: replace_blip failed for Freeform 24")
+        else:
+            print("Warning: Freeform 24 not found on slide 4")
     except Exception as e:
-        print(f"Warning: _brand_cabine_carre failed: {e}")
+        print(f"Warning: cabine carrée (Freeform 24) failed: {e}")
+
+    # ── Cabine RONDE (Freeform 25) ───────────────────────────────────────────
+    # Priority: AI image from Gemini → fallback to Pillow local model
+    try:
+        if req.cabine_ronde_url:
+            branded_f25 = get_image_bytes(req.cabine_ronde_url)
+        else:
+            branded_f25 = _brand_cabine_ronde(
+                primary_hex = primary_h,
+                logo_bytes  = logo_bytes,
+                brand_name  = req.brand_name or "",
+            )
+        shape_f25 = get_shape(slide4, "Freeform 25")
+        if shape_f25 is not None:
+            if not replace_blip(slide4.part, shape_f25, branded_f25):
+                print("Warning: replace_blip failed for Freeform 25")
+        else:
+            print("Warning: Freeform 25 not found on slide 4")
+    except Exception as e:
+        print(f"Warning: cabine ronde (Freeform 25) failed: {e}")
 
     # ── Bandes photo slide 3 : rebranding CHANEL → marque (nom + logo) ──────────
     try:
@@ -1017,10 +1160,9 @@ def generate_presentation(req: GenerateRequest):
         print(f"Warning: _style_photo_strips failed: {e}")
 
     # ── Goodies : inject_picture_at_shape sur le groupe (overlay fiable) ─────
-    # python-pptx conserve les indices ORIGINAUX en mémoire même après _delete_slide.
-    # "Nos goodies" = index 10 dans le template Chanel, reste à 10 après suppression.
-    # Le blip est dans un tout petit enfant Freeform — on overlay le GROUP entier.
-    GOODIES_SLIDE = 10
+    # Après _delete_slide(prs, 9), l'ancienne slide 10 (Nos goodies) passe à l'index 9.
+    # Chanel template : slides 0-10 → après suppression slide 9 → goodies = index 9.
+    GOODIES_SLIDE = 9
     goodies_inject = [
         ("Group 2", req.goodies_top_url),
         ("Group 4", req.goodies_bottom_url),

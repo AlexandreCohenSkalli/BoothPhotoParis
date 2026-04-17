@@ -1,7 +1,9 @@
 /**
- * Google Imagen — via Google AI Studio REST API
+ * Google Imagen + Gemini 2.0 Flash Image Generation — via Google AI Studio REST API
  * Docs: https://ai.google.dev/api/images
  */
+import { readFileSync } from "fs"
+import { join } from "path"
 
 export interface BrandContext {
   brandName: string
@@ -61,6 +63,72 @@ export async function generateImage(prompt: string, aspectRatio: "16:9" | "9:16"
   return `data:image/png;base64,${b64}`
 }
 
+/**
+ * Generate an image from a reference image + text prompt via Gemini 2.0 Flash.
+ * The reference image is read from /public/ on the filesystem.
+ * Returns a base64 data URL.
+ */
+export async function generateImageFromReference(
+  referenceImagePath: string, // absolute path to the reference JPEG
+  prompt: string,
+  aspectRatio: "16:9" | "9:16" | "1:1" | "4:5" | "3:4" = "16:9"
+): Promise<string> {
+  const apiKey = process.env.GOOGLE_AI_STUDIO_API_KEY
+  if (!apiKey) throw new Error("GOOGLE_AI_STUDIO_API_KEY not set")
+
+  // Read reference image as base64
+  const imageBuffer = readFileSync(referenceImagePath)
+  const imageBase64 = imageBuffer.toString("base64")
+
+  const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-image:generateContent?key=${encodeURIComponent(apiKey)}`
+
+  const res = await fetch(url, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      contents: [{
+        parts: [
+          {
+            inlineData: {
+              mimeType: "image/jpeg",
+              data: imageBase64,
+            },
+          },
+          { text: prompt },
+        ],
+      }],
+      generationConfig: {
+        responseModalities: ["IMAGE", "TEXT"],
+      },
+    }),
+  })
+
+  if (!res.ok) {
+    const errText = await res.text()
+    let googleMessage = errText
+    try {
+      const parsed = JSON.parse(errText)
+      if (parsed?.error?.message) googleMessage = String(parsed.error.message)
+    } catch { /* keep raw */ }
+    throw new Error(`Gemini image generation error (${res.status}): ${googleMessage}`)
+  }
+
+  const json = await res.json()
+  // Response parts: find the image part
+  const candidate = json.candidates?.[0]
+  const finishReason = candidate?.finishReason ?? "UNKNOWN"
+  const parts: Array<{ inlineData?: { data: string; mimeType: string }; text?: string }> =
+    candidate?.content?.parts ?? []
+  const imgPart = parts.find((p) => p.inlineData?.mimeType?.startsWith("image/"))
+  if (!imgPart?.inlineData) {
+    const textPart = parts.find((p) => p.text)?.text ?? ""
+    const safetyRatings = JSON.stringify(candidate?.safetyRatings ?? [])
+    throw new Error(`Gemini: no image returned (finishReason=${finishReason}, text="${textPart.slice(0, 200)}", safety=${safetyRatings})`)
+  }
+
+  return `data:${imgPart.inlineData.mimeType};base64,${imgPart.inlineData.data}`
+}
+
 // ─── Zone-specific prompts ────────────────────────────────────────────────────
 
 function colorDesc(hex?: string, label = "brand color"): string {
@@ -87,9 +155,26 @@ function base(brand: BrandContext): string {
 
 /** Return a venue / atmosphere description tuned to the brand's sector. */
 function secteurVenue(brand: BrandContext): string {
-  // Combine description + secteur for keyword matching — description from Brandfetch
-  // is usually rich enough (e.g. "Luxury fashion house", "Global tech company", etc.)
-  const s = [brand.secteur ?? "", brand.description ?? ""].join(" ").toLowerCase()
+  // Combine description + secteur + brandName for keyword matching
+  const s = [brand.secteur ?? "", brand.description ?? "", brand.brandName ?? ""].join(" ").toLowerCase()
+
+  // Brand-specific venues
+  if (s.includes("chanel"))
+    return "an elegant Chanel flagship boutique with black and white decor, camellia flowers and gold accents"
+  if (s.includes("dior"))
+    return "a luxurious Dior beauty boutique with soft pink and cream marble interiors, elegant glass display cases and warm golden lighting"
+  if (s.includes("netflix"))
+    return "a Netflix premiere event with a bold red carpet, large Netflix logo backdrop, dramatic spotlights and an excited crowd in bokeh"
+  if (s.includes("spotify"))
+    return "a Spotify Wrapped launch party with colorful LED installations, music visualizer walls and a vibrant crowd"
+  if (s.includes("nike"))
+    return "a Nike flagship store with dramatic black walls, spotlit sneaker displays and an athletic crowd in bokeh"
+  if (s.includes("apple"))
+    return "an Apple Store launch event with clean white minimalist interiors, glass tables and dramatic product spotlights"
+  if (s.includes("louis vuitton") || s.includes("lv"))
+    return "a Louis Vuitton flagship store with monogram decor, gilded fixtures and elegant Parisian atmosphere"
+  if (s.includes("hermès") || s.includes("hermes"))
+    return "a Hermès boutique with warm orange decor, premium leather goods on display and refined Parisian lighting"
 
   if (s.includes("luxe") || s.includes("luxury") || s.includes("haute couture") || s.includes("maison"))
     return "an opulent palace ballroom with marble floors, gilded mirrors, crystal chandeliers and lush floral arrangements"
@@ -133,76 +218,246 @@ export function promptCover(brand: BrandContext): string {
 }
 
 /**
- * Zone 2/3 — Cabine renders
- *
- * TWO DISTINCT MODELS:
- *
- * MODEL 1 (top / Freeform 25) — "Cabine Arrondie" — Dior/Roland Garros style:
- *   - Wide and deep body — almost cubic, wider than it looks tall
- *   - Large rounded arch opening (not full height) — SHORT curtains, padded bench/seat visible at the bottom
- *   - Heavily rounded outer corners on ALL edges and faces (large corner radius)
- *   - Exterior fully wrapped in solid brand color, matte premium finish
- *   - Brand logo vertical on left face + large brand name on right side panel
- *   - Photo print dispensing slot on the front left panel
- *   - 3/4 front-left angle showing front arch face AND right side panel
- *   - Real event atmosphere behind (bokeh)
- *
- * MODEL 2 (bottom / Freeform 24) — "Cabine Carrée" — QVEMA/SketchUp style:
- *   - Perfectly rectangular box, sharp 90° corners, no rounding
- *   - Dimensions: exactly 148 cm wide × 148 cm deep × 189 cm tall
- *   - Front face has a rectangular (not rounded) or slightly arched opening
- *   - Vertical fabric curtains inside, photo print slot at bottom front
- *   - Exterior branded wrap on side panel with brand name/logo large
- *   - SketchUp-style technical render with dimension annotation lines
+ * Returns a short description of what iconic brand products / visuals to show
+ * in the three photo-strip slots of the cabine carrée, tailored to the brand's sector.
  */
-export function promptCabine(brand: BrandContext, angle: "top" | "bottom"): string {
-  if (angle === "top") {
-    // Vue 1 — Cabine arrondie style Dior : large, profonde, coins arrondis, siège visible
-    const venueStyle = secteurVenue(brand)
-    return [
-      `High-end editorial photograph of a luxury branded photo booth at a real event for "${brand.brandName}".`,
-      "The photo booth is a large wide box — wider and deeper than a standard cabine, almost cubic proportions.",
-      "ALL outer corners and edges are heavily rounded with a large radius, giving a soft premium look on every face.",
-      "Front face has a tall rounded arch opening (not as tall as the full machine height). SHORT fabric curtains hang inside the arch — they stop mid-way, clearly showing a padded bench/seat at the bottom inside the booth.",
-      "Front left panel has a horizontal print dispensing slot and a small camera lens.",
-      brand.primaryColor
-        ? `Entire exterior — all faces — wrapped in solid ${brand.primaryColor}, matte premium finish.`
-        : "Entire exterior in a rich solid brand color, matte premium finish.",
-      `Brand logo printed vertically large on the left side face. Brand name "${brand.brandName}" printed large on the right side panel.`,
-      `Camera at 3/4 angle showing the arch front face and the right side panel simultaneously.`,
-      `Scene: ${venueStyle}. The booth stands on the venue floor, guests in soft bokeh behind, warm uplighting. Elegant aspirational atmosphere.`,
-      "FULL MACHINE IN FRAME — entire booth head to toe, floor contact visible. Nothing cropped. No people inside the booth.",
+function secteurSlotContent(brand: BrandContext): string {
+  const s = [brand.secteur ?? "", brand.description ?? "", brand.brandName ?? ""].join(" ").toLowerCase()
+
+  if (s.includes("chanel")) return "iconic Chanel N°5 perfume bottles, a Chanel quilted handbag, and the Chanel double-C logo against a black background"
+  if (s.includes("dior")) return "iconic Dior Sauvage fragrance bottle, a Lady Dior bag, and a Dior fashion runway look"
+  if (s.includes("netflix")) return "iconic Netflix movie and series posters (Stranger Things, Squid Game, Wednesday) displayed as film stills"
+  if (s.includes("spotify")) return "Spotify Wrapped colorful cards, album cover art collage, and music waveform visuals"
+  if (s.includes("apple")) return "sleek Apple products — iPhone, MacBook, AirPods — on a clean white background"
+  if (s.includes("nike")) return "iconic Nike sneakers (Air Jordan, Air Max), a running athlete silhouette, and the Nike swoosh"
+  if (s.includes("louis vuitton") || s.includes("lv")) return "Louis Vuitton monogram bags, leather goods, and runway fashion looks"
+  if (s.includes("hermès") || s.includes("hermes")) return "Hermès Birkin bag, silk scarves, and equestrian leather goods on a warm background"
+  if (s.includes("rolex")) return "close-up of a Rolex Submariner, Daytona, and Datejust watches on dark velvet"
+
+  if (s.includes("luxe") || s.includes("luxury") || s.includes("haute couture") || s.includes("maison"))
+    return `iconic ${brand.brandName} luxury products — signature bags, perfumes, or jewelry — in editorial photography style`
+  if (s.includes("beauty") || s.includes("beaut") || s.includes("cosmetic") || s.includes("skincare") || s.includes("parfum") || s.includes("fragrance"))
+    return `${brand.brandName} hero fragrance or skincare bottles, a flat-lay of cosmetics, and a beauty campaign visual`
+  if (s.includes("mode") || s.includes("fashion") || s.includes("apparel") || s.includes("clothing") || s.includes("wear"))
+    return `${brand.brandName} signature clothing pieces, runway look, and accessories in editorial style`
+  if (s.includes("tech") || s.includes("software") || s.includes("digital") || s.includes("saas") || s.includes("startup"))
+    return `${brand.brandName} app interface screenshot, a product hero shot, and a team collaboration visual`
+  if (s.includes("auto") || s.includes("voiture") || s.includes("car") || s.includes("motor") || s.includes("vehicle"))
+    return `${brand.brandName} hero car model in dramatic studio lighting, dashboard close-up, and outdoor action shot`
+  if (s.includes("food") || s.includes("restaurant") || s.includes("boisson") || s.includes("beverage") || s.includes("drink") || s.includes("wine") || s.includes("champagne"))
+    return `${brand.brandName} signature dish or drink, ingredient flat-lay, and a restaurant or venue atmosphere shot`
+  if (s.includes("music") || s.includes("streaming") || s.includes("entertainment") || s.includes("media") || s.includes("film") || s.includes("tv"))
+    return `${brand.brandName} iconic show or album covers, a concert atmosphere, and a talent portrait`
+  if (s.includes("sport") || s.includes("fitness") || s.includes("athletic") || s.includes("running"))
+    return `${brand.brandName} athletic gear, an action sports shot, and athlete portrait`
+  if (s.includes("finance") || s.includes("bank") || s.includes("insurance") || s.includes("corporate") || s.includes("consulting"))
+    return `${brand.brandName} brand visuals — a city skyline at night, a handshake close-up, and the company logo on signage`
+
+  return `${brand.brandName} iconic product or service visual, a brand lifestyle shot, and the company logo on a clean background`
+}
+
+/**
+ * Zone 2/3 — Cabine renders (image-to-image via Gemini 2.0 Flash)
+ *
+ * MODEL 1 (top / Freeform 25) — "Cabine Arrondie" — ref: modeleclassiquerond.jpeg
+ * MODEL 2 (bottom / Freeform 24) — "Cabine Carrée" — ref: modeleclassiquecarre.jpeg
+ */
+
+/** Prompt for Freeform 25 — cabine arrondie */
+export function promptCabineRonde(brand: BrandContext): string {
+  const colorLine = brand.primaryColor
+    ? `The entire exterior of the booth must use the brand's primary color ${brand.primaryColor}${brand.secondaryColor ? ` with secondary color ${brand.secondaryColor} as accent` : ""} as the main wrap color, perfectly smooth and matte.`
+    : ""
+  return [
+    `This is a reference photo of a Booth Paris rounded photo booth. Recreate this exact photo booth in the exact same style, 3/4 angle, lighting, and composition,`,
+    `but fully re-branded for the company "${brand.brandName}". Output image must be portrait 4:5 aspect ratio.`,
+    colorLine,
+    `Replace any logo, text, or branding on the machine with the "${brand.brandName}" name and logo, large and clearly visible.`,
+    brand.description ? `Brand identity: ${brand.description}.` : "",
+    brand.secteur ? `Industry: ${brand.secteur}.` : "",
+    `The booth is photographed at a real ${secteurVenue(brand)}. Guests in soft bokeh behind.`,
+    "Keep the exact same machine shape, rounded corners, arch opening, and curtains as in the reference image.",
+    "Full machine in frame — head to toe visible, nothing cropped. No people inside the booth.",
+  ].filter(Boolean).join(" ")
+}
+
+/** Prompt for Freeform 24 — cabine carrée (surgical edit: right panel + 3 left slots only) */
+export function promptCabineCarree(brand: BrandContext): string {
+  const slotContent = secteurSlotContent(brand)
+  const colorLine = brand.primaryColor
+    ? `Use the brand's primary color ${brand.primaryColor} as the background for the right panel branding area.`
+    : "Keep the existing panel color."
+
+  return [
+    `This is a reference photo of a square Booth Paris photo booth (cabine carrée). Output image must be square 1:1 aspect ratio.`,
+    `Make only two surgical changes — do NOT modify anything else in the image:`,
+
+    `CHANGE 1 — Large textured right-side panel:`,
+    `On the right face of the booth, there is a large white textured rectangular panel in perspective.`,
+    `Keep its exact shape, size, perspective, and position in the image.`,
+    `Replace only its surface with a clean solid branded wrap for "${brand.brandName}":`,
+    colorLine,
+    `Add the "${brand.brandName}" brand name in large clean typography and the brand logo, centered on the panel.`,
+    `The result must look like a premium branded vinyl wrap — perfectly smooth, matte, no texture, no pattern.`,
+
+    `CHANGE 2 — Three white photo-strip rectangles on the left:`,
+    `On the left column of the booth there are three small vertical white rectangles (photo strip slots).`,
+    `Replace the content of each rectangle with a distinct photographic image related to "${brand.brandName}":`,
+    `Slot 1: ${slotContent.split(",")[0] ?? `${brand.brandName} iconic product`}.`,
+    `Slot 2: ${slotContent.split(",")[1] ?? `${brand.brandName} lifestyle visual`}.`,
+    `Slot 3: ${slotContent.split(",")[2] ?? `${brand.brandName} brand visual`}.`,
+    `Each slot image must be a real editorial photo, sharp, no text overlay.`,
+
+    `Keep everything else in the image exactly as it is: the booth structure, the floor, the background, the lighting, the shadows, the camera angle, and all other elements.`,
+    brand.description ? `Brand context: ${brand.description}.` : "",
+  ].filter(Boolean).join(" ")
+}
+
+/** Returns the absolute filesystem path to a reference image in /public. */
+function refImagePath(filename: string): string {
+  return join(process.cwd(), "public", filename)
+}
+
+/**
+/** Imagen text-to-image fallback prompt for cabine ronde */
+function promptCabineRondeFallback(brand: BrandContext): string {
+  const venue = secteurVenue(brand)
+  return [
+    `Editorial photograph of a premium rounded photo booth at ${venue}.`,
+    `The booth has heavily rounded corners, a large arch opening with short curtains, a padded bench inside, and a print dispensing slot on the front panel.`,
+    brand.primaryColor ? `Entire exterior wrapped in solid ${brand.primaryColor}, matte premium finish.` : "Exterior in a rich solid dark color, matte premium finish.",
+    `Brand name "${brand.brandName}" printed large on the side panel. Brand logo visible on the front.`,
+    `3/4 angle, guests in soft bokeh behind, warm uplighting. Full machine in frame, nothing cropped. No people inside.`,
+    brand.description ? `Brand: ${brand.description}.` : "",
+  ].filter(Boolean).join(" ")
+}
+
+/** Imagen text-to-image fallback prompt for cabine carrée */
+function promptCabineCarreeFallback(brand: BrandContext): string {
+  const slotContent = secteurSlotContent(brand)
+  return [
+    `SketchUp-style 3D technical render of a square photo booth (148cm × 148cm × 189cm) branded for "${brand.brandName}".`,
+    `Rectangular box, sharp corners, flat roof. Front face has a rectangular opening with vertical curtains. Left narrow panel has a print slot. Right side panel has a large branded graphic.`,
+    brand.primaryColor ? `Panels in ${brand.primaryColor}. Right side panel shows "${brand.brandName}" name and logo large on ${brand.primaryColor} background.` : `Dark panels with "${brand.brandName}" name and logo large on the right side panel.`,
+    `Three small vertical photo strip rectangles on the left column showing: ${slotContent.split(",").slice(0,3).join(",")}.`,
+    `Light grey SketchUp ground plane, technical render style, 3/4 front-right perspective. Full machine in frame, nothing cropped.`,
+  ].filter(Boolean).join(" ")
+}
+
+/** Imagen text-to-image fallback prompt for kiosk */
+function promptKioskFallback(brand: BrandContext): string {
+  const venue = secteurVenue(brand)
+  const photos = kioskPhotoContent(brand)
+  return [
+    `Editorial photograph of a freestanding photobooth kiosk tower for "${brand.brandName}" placed in ${venue}.`,
+    `The kiosk is a tall slim rectangular column. Top header panel shows "${brand.brandName}" brand name large. Below the header is a thin black camera flash bar. Center has a large vertical screen showing ${photos}. Bottom has a print dispensing slot.`,
+    brand.primaryColor ? `Exterior in solid ${brand.primaryColor}, matte premium finish.` : "Exterior in matte dark premium finish.",
+    `Full machine in frame top to floor, portrait orientation, soft bokeh background, editorial lighting. No people.`,
+    brand.description ? `Brand: ${brand.description}.` : "",
+  ].filter(Boolean).join(" ")
+}
+
+/**
+ * Generate a cabine image using the reference photo + Gemini image-to-image.
+ * Automatically falls back to Imagen text-to-image if Gemini refuses (IMAGE_OTHER).
+ */
+export async function generateCabine(
+  brand: BrandContext,
+  model: "ronde" | "carree"
+): Promise<string> {
+  const refFile = model === "ronde" ? "ref-cabine-ronde.jpeg" : "ref-cabine-carree.jpeg"
+  const prompt = model === "ronde" ? promptCabineRonde(brand) : promptCabineCarree(brand)
+  const aspectRatio = model === "ronde" ? "4:5" : "1:1"
+  try {
+    return await generateImageFromReference(refImagePath(refFile), prompt, aspectRatio)
+  } catch (err) {
+    console.warn(`Gemini cabine ${model} refused, retrying with simplified prompt:`, err)
+    // Retry with minimal prompt — no brand-specific details that trigger content policy
+    const simple = [
+      `Restyle this photo booth for a brand called "${brand.brandName}".`,
+      model === "ronde"
+        ? `Keep the exact same rounded booth shape, arch opening, curtains, bench, and 3/4 angle.`
+        : `Keep the exact same square booth shape, structure, and perspective.`,
+      brand.primaryColor ? `Change the exterior color to ${brand.primaryColor}.` : "",
+      `Replace any text or logo with "${brand.brandName}". Keep everything else identical.`,
     ].filter(Boolean).join(" ")
-  } else {
-    // Vue 2 — rendu SketchUp technique fidèle à l'image de référence Booth/Chanel
-    return [
-      `SketchUp 3D architectural render of a photo booth cabine branded for "${brand.brandName}". Style: technical product visualization, exact same aesthetic as a Booth Paris SketchUp export.`,
-      "Structure: tall rectangular box, approximately 148 cm wide × 148 cm deep × 189 cm tall. Flat roof panel. Front face divided into left narrow panel (with dispensing slot and small screen showing photo strips) and right wider opening with hanging vertical fabric curtains. Right side panel has large brand wrap graphics.",
-      brand.primaryColor
-        ? `Panels in ${brand.primaryColor} with contrasting trim. Right side panel large brand graphic on ${brand.primaryColor} background.`
-        : "Dark wood-tone panels with contrasting trim. Right side panel large brand graphic.",
-      `"${brand.brandName}" brand name and logo large on the right side panel. Small "${brand.brandName}" badge on the front left panel.`,
-      "Viewed from a 3/4 front-right perspective showing front face and right side. Light grey-green SketchUp ground plane visible, dimension annotation lines with measurements. Checkerboard or solid floor texture at base. Characteristic SketchUp flat ambient lighting, no shadows, technical drawing feel.",
-      "FULL MACHINE IN FRAME — entire booth visible head to toe. Nothing cropped.",
-    ].filter(Boolean).join(" ")
+    return generateImageFromReference(refImagePath(refFile), simple, aspectRatio)
   }
 }
 
 /**
- * Zone 4 — Kiosk render (PORTRAIT 9:16)
- * Rectangular tower: logo+name header, 4 photo strips in 2×2 grid on screen, small camera above screen.
+ * Zone 4 — Kiosk (image-to-image via Gemini 2.5 Flash)
+ * Reference: ref-kiosk.jpeg (Jimmy Fairly kiosk)
+ * Freeform 8: 5.78" x 9.71" ≈ 9:16 portrait
  */
+
+/** Returns the 4 photo content descriptions shown on the kiosk screen.
+ * Always shows natural photobooth-style photos of real people — like guests actually using the booth. */
+function kioskPhotoContent(brand: BrandContext): string {
+  const s = [brand.secteur ?? "", brand.description ?? "", brand.brandName ?? ""].join(" ").toLowerCase()
+
+  // Luxury / fashion — elegant but still candid
+  if (s.includes("luxe") || s.includes("luxury") || s.includes("haute couture") || s.includes("maison") ||
+      s.includes("chanel") || s.includes("dior") || s.includes("hermes") || s.includes("hermès") ||
+      s.includes("louis vuitton") || s.includes("lv"))
+    return `4 candid photobooth photos of two elegantly dressed women smiling and laughing together, natural joyful expressions, white photo strip template frame with "${brand.brandName}" text at the bottom`
+
+  // Sport / energy
+  if (s.includes("sport") || s.includes("fitness") || s.includes("athletic") || s.includes("running") || s.includes("nike") || s.includes("adidas"))
+    return `4 fun photobooth photos of two friends in sporty casual outfits, big smiles and playful poses, clean white photo strip template with "${brand.brandName}" at the bottom`
+
+  // Entertainment / music
+  if (s.includes("music") || s.includes("streaming") || s.includes("entertainment") || s.includes("media") || s.includes("film") || s.includes("tv") || s.includes("netflix") || s.includes("spotify"))
+    return `4 fun photobooth photos of two young friends laughing and making silly faces, vibrant photo strip template with "${brand.brandName}" at the bottom`
+
+  // Food & drinks
+  if (s.includes("food") || s.includes("restaurant") || s.includes("boisson") || s.includes("beverage") || s.includes("drink") || s.includes("wine") || s.includes("champagne"))
+    return `4 joyful photobooth photos of two friends clinking glasses and smiling, warm-toned photo strip template with "${brand.brandName}" at the bottom`
+
+  // Default — universal photobooth vibe
+  return `4 natural photobooth photos of two smiling friends making fun poses together, classic white photo strip template frame with "${brand.brandName}" text at the bottom`
+}
+
 export function promptKiosk(brand: BrandContext): string {
+  const venue = secteurVenue(brand)
+  const photos = kioskPhotoContent(brand)
+  const exteriorColor = brand.primaryColor
+    ? `${brand.primaryColor} matte finish`
+    : `dark matte black finish`
+  const headerBg = brand.primaryColor
+    ? `${brand.primaryColor} background`
+    : `dark background`
+
   return [
-    `3D product render of a photobooth kiosk tower branded for "${brand.brandName}".`,
-    "The kiosk is a tall slim freestanding rectangular column (much taller than wide). Exact structure from top to bottom: (1) flat square header box on top with brand logo and brand name large — like a lightbox sign; (2) small round camera lens mounted just below the header; (3) large vertical rectangular touchscreen display in the center of the column showing a 2×2 grid of four photo strip thumbnails; (4) thin horizontal print dispensing slot near the bottom.",
-    "Open-air design — no curtains, no enclosure. Clean straight edges, slightly rounded outer corners.",
-    brand.primaryColor
-      ? `Exterior column panels in solid ${brand.primaryColor}, matte premium finish.`
-      : "Exterior in matte dark premium finish.",
-    `Brand logo and "${brand.brandName}" name prominently on the top header lightbox. Brand color accents on the column.`,
-    "FULL MACHINE IN FRAME — entire kiosk visible from top of header to floor contact. Camera pulled back. Plain soft white or very light grey studio background, no room environment. Product studio render quality. No people.",
+    `Restyle the photobooth kiosk in this reference image for the brand "${brand.brandName}". Keep only the kiosk shape and physical structure. Output: portrait 9:16.`,
+
+    `TOP HEADER: replace existing brand name with "${brand.brandName}" in official brand typography, on a ${headerBg}.`,
+    `FLASH BAR: the thin horizontal bar just below the header is a camera flash unit — keep it solid BLACK, no text.`,
+    `MACHINE BODY: repaint the exterior in ${exteriorColor}. Remove all existing text and logos from the body.`,
+    `SCREEN PANEL: show a 2×2 grid of ${photos}. At the bottom of the grid, show "${brand.brandName}" in a clean white photo strip template.`,
+    `BACKGROUND: place the kiosk in ${venue}, realistic lighting, soft bokeh. The background must look like ${venue}.`,
+
+    `Keep the full kiosk in frame (top to floor). Editorial product photography.`,
+    brand.description ? `Brand: ${brand.description}.` : "",
   ].filter(Boolean).join(" ")
+}
+
+/** Generate kiosk image using Jimmy Fairly reference + Gemini image-to-image.
+ * On refusal, retries with a minimal prompt to avoid content policy triggers while keeping the reference shape. */
+export async function generateKiosk(brand: BrandContext): Promise<string> {
+  try {
+    return await generateImageFromReference(refImagePath("ref-kiosk.jpeg"), promptKiosk(brand), "9:16")
+  } catch (err) {
+    console.warn("Gemini kiosk refused, retrying with simplified prompt:", err)
+    const simple = [
+      `Using this reference image for the kiosk SHAPE ONLY, create a photobooth kiosk for brand "${brand.brandName}".`,
+      `DO NOT keep: the store background, the glasses/eyewear products, the "Jimmy Fairly" text, or the people wearing glasses in the screen photos.`,
+      `REPLACE WITH: background = ${secteurVenue(brand)}. Screen = 4 photos of two happy people smiling and posing. Header text = "${brand.brandName}".`,
+      brand.primaryColor ? `Machine exterior color: ${brand.primaryColor}.` : "",
+      `Keep only the kiosk shape and proportions from the reference.`,
+    ].filter(Boolean).join(" ")
+    return generateImageFromReference(refImagePath("ref-kiosk.jpeg"), simple, "9:16")
+  }
 }
 
 /**
@@ -222,28 +477,32 @@ export function promptGoodies(brand: BrandContext, row: "top" | "bottom"): strin
 }
 
 /**
- * Generate all 6 zone images in parallel for a brand.
+ * Generate all zone images for a brand.
+ * Cabines: Gemini image-to-image from reference photos.
+ * Kiosk + goodies: Imagen text-to-image.
  * Returns an object matching the Python API's GenerateRequest fields.
  */
 export async function generateAllZones(brand: BrandContext): Promise<{
   cover_image_url: string | null
-  cabine_top_url: string
-  cabine_bottom_url: string
+  cabine_ronde_url: string
+  cabine_carree_url: string
   kiosk_url: string
   goodies_top_url: string
   goodies_bottom_url: string
 }> {
-  // Cover = no AI image (Python uses brand logo + background color directly)
-  const cabineTop    = await generateImage(promptCabine(brand, "top"),    "9:16")
-  const cabineBottom = await generateImage(promptCabine(brand, "bottom"), "9:16")
-  const kiosk        = await generateImage(promptKiosk(brand),             "9:16")
-  const goodiesTop   = await generateImage(promptGoodies(brand, "top"),   "16:9")
-  const goodiesBottom = await generateImage(promptGoodies(brand, "bottom"), "16:9")
+  // Run all generations in parallel
+  const [cabineRonde, cabineCarree, kiosk, goodiesTop, goodiesBottom] = await Promise.all([
+    generateCabine(brand, "ronde"),
+    generateCabine(brand, "carree"),
+    generateKiosk(brand),
+    generateImage(promptGoodies(brand, "top"), "16:9"),
+    generateImage(promptGoodies(brand, "bottom"), "16:9"),
+  ])
 
   return {
     cover_image_url: null,
-    cabine_top_url: cabineTop,
-    cabine_bottom_url: cabineBottom,
+    cabine_ronde_url: cabineRonde,
+    cabine_carree_url: cabineCarree,
     kiosk_url: kiosk,
     goodies_top_url: goodiesTop,
     goodies_bottom_url: goodiesBottom,

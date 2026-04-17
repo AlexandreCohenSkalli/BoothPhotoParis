@@ -27,14 +27,35 @@ const schema = z.object({
   zones: z
     .object({
       cover_image_url: z.string().nullable().optional(),
-      cabine_top_url: z.string().min(1),
-      cabine_bottom_url: z.string().min(1),
+      cabine_ronde_url: z.string().optional(),
+      cabine_carree_url: z.string().optional(),
       kiosk_url: z.string().min(1),
       goodies_top_url: z.string().min(1),
       goodies_bottom_url: z.string().min(1),
     })
     .optional(),
 })
+
+/**
+ * Génère 3 URLs Pollinations pour les slots de la cabine carrée.
+ * Prompts adaptés à la marque : produits, univers éditorial.
+ * Aucun téléchargement ici — l'API Python fera le fetch.
+ */
+function buildCabineSlotUrls(brandName: string, secteur?: string, description?: string): string[] {
+  const ctx = description
+    ? description.slice(0, 80)
+    : secteur
+      ? `${secteur} brand`
+      : "luxury brand"
+  const prompts = [
+    `${brandName} iconic product, editorial photography, clean white background, no text`,
+    `${brandName} ${ctx}, lifestyle aesthetic, professional product shot, no text`,
+    `${brandName} brand visual, minimalist, elegant, no text, studio lighting`,
+  ]
+  return prompts.map((p, i) =>
+    `https://image.pollinations.ai/prompt/${encodeURIComponent(p)}?width=400&height=500&nologo=true&seed=${i + 42}`
+  )
+}
 
 export async function POST(req: NextRequest) {
   const supabase = await createClient()
@@ -61,7 +82,7 @@ export async function POST(req: NextRequest) {
   // Step 1: Generate images unless already provided (preview flow)
   let zones: Awaited<ReturnType<typeof generateAllZones>>
   if (zonesFromClient) {
-    zones = zonesFromClient
+    zones = zonesFromClient as typeof zones
   } else {
     try {
       zones = await generateAllZones(brandContext)
@@ -75,11 +96,22 @@ export async function POST(req: NextRequest) {
     }
   }
 
+  // 3 images brand pour les slots de la cabine carrée (générées via Pollinations)
+  const cabineSlotUrls = buildCabineSlotUrls(brand_name, secteur, description)
+
   // Step 2: Call Python API to inject images into PPTX
   const pythonApiUrl = process.env.PYTHON_API_URL ?? "http://localhost:8000"
 
   let pptxBuffer: ArrayBuffer
   try {
+    const { cabine_ronde_url, cabine_carree_url, kiosk_url, goodies_top_url, goodies_bottom_url } = zones as {
+      cabine_ronde_url?: string
+      cabine_carree_url?: string
+      kiosk_url: string
+      goodies_top_url: string
+      goodies_bottom_url: string
+      [key: string]: unknown
+    }
     const pyRes = await fetch(`${pythonApiUrl}/generate-presentation`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -92,7 +124,12 @@ export async function POST(req: NextRequest) {
         logo_icon_url: logo_icon_url ?? null,
         cover_style,
         strip_style,
-        ...zones,
+        cabine_ronde_url: cabine_ronde_url ?? null,
+        cabine_carree_url: cabine_carree_url ?? null,
+        kiosk_url,
+        goodies_top_url,
+        goodies_bottom_url,
+        cabine_slot_urls: cabineSlotUrls,
       }),
     })
 
@@ -173,11 +210,9 @@ export async function POST(req: NextRequest) {
         status: "completed",
         image_count: 6,
         output_image_urls: [
-          zones.cabine_top_url?.startsWith("data:") ? null : zones.cabine_top_url,
-          zones.cabine_bottom_url?.startsWith("data:") ? null : zones.cabine_bottom_url,
-          zones.kiosk_url?.startsWith("data:") ? null : zones.kiosk_url,
-          zones.goodies_top_url?.startsWith("data:") ? null : zones.goodies_top_url,
-          zones.goodies_bottom_url?.startsWith("data:") ? null : zones.goodies_bottom_url,
+          (zones as any).kiosk_url?.startsWith("data:") ? null : (zones as any).kiosk_url,
+          (zones as any).goodies_top_url?.startsWith("data:") ? null : (zones as any).goodies_top_url,
+          (zones as any).goodies_bottom_url?.startsWith("data:") ? null : (zones as any).goodies_bottom_url,
         ].filter(Boolean) as string[],
         exported_pptx_url: exportedPptxUrl,
         created_by: session.user.id,

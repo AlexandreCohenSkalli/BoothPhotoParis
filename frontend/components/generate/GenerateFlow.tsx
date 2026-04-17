@@ -29,16 +29,16 @@ type Step = "input" | "preview" | "generating" | "done"
 
 type Zones = {
   cover_image_url: string | null
-  cabine_top_url: string
-  cabine_bottom_url: string
+  cabine_ronde_url: string
+  cabine_carree_url: string
   kiosk_url: string
   goodies_top_url: string
   goodies_bottom_url: string
 }
 
 const ZONE_LABELS = [
-  "Cabine — vue 1",
-  "Cabine — vue 2",
+  "Cabine arrondie",
+  "Cabine carrée",
   "Kiosk",
   "Goodies — rangée 1",
   "Goodies — rangée 2",
@@ -546,15 +546,15 @@ export default function GenerateFlow() {
                   <div className="grid grid-cols-2 gap-3">
                     {(
                       [
-                        { key: "cabine_top_url",    label: ZONE_LABELS[0], src: zones.cabine_top_url,    portrait: true },
-                        { key: "cabine_bottom_url", label: ZONE_LABELS[1], src: zones.cabine_bottom_url, portrait: true },
-                        { key: "kiosk_url",         label: ZONE_LABELS[2], src: zones.kiosk_url,         portrait: true },
-                        { key: "goodies_top_url",   label: ZONE_LABELS[3], src: zones.goodies_top_url,   portrait: false },
-                        { key: "goodies_bottom_url",label: ZONE_LABELS[4], src: zones.goodies_bottom_url,portrait: false },
-                      ] as { key: string; label: string; src: string; portrait: boolean }[]
+                        { key: "cabine_ronde_url",   label: ZONE_LABELS[0], src: zones.cabine_ronde_url,   aspect: "aspect-[4/5]" },
+                        { key: "cabine_carree_url",  label: ZONE_LABELS[1], src: zones.cabine_carree_url,  aspect: "aspect-square" },
+                        { key: "kiosk_url",          label: ZONE_LABELS[2], src: zones.kiosk_url,          aspect: "aspect-[9/16]" },
+                        { key: "goodies_top_url",    label: ZONE_LABELS[3], src: zones.goodies_top_url,    aspect: "aspect-video" },
+                        { key: "goodies_bottom_url", label: ZONE_LABELS[4], src: zones.goodies_bottom_url, aspect: "aspect-video" },
+                      ] as { key: string; label: string; src: string; aspect: string }[]
                     ).map((item) => (
                       <div key={item.key} className="space-y-1">
-                        <div className={`relative w-full overflow-hidden rounded-lg border border-border bg-muted ${item.portrait ? "aspect-[9/16]" : "aspect-video"}`}>
+                        <div className={`relative w-full overflow-hidden rounded-lg border border-border bg-muted ${item.aspect}`}>
                           <Image
                             src={item.src}
                             alt={item.label}
