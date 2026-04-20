@@ -183,6 +183,54 @@ def _delete_slide(prs, slide_idx: int):
     sld_id_lst.remove(sld_ids[slide_idx])
 
 
+def _rebrand_tarifs_slide(prs, slide_idx: int, primary_hex: str, logo_bytes: Optional[bytes]):
+    """
+    Slide "Nos tarifs" : adapte fond + watermark logo à la marque.
+    - Fond : couleur primaire de la marque (au lieu du noir Chanel)
+    - Freeform 4 : grand watermark logo semi-transparent (alpha 29%) → remplacé par le logo brand
+    - Freeform 5 : petit logo en bas à droite → remplacé par le logo brand
+    """
+    if slide_idx >= len(prs.slides):
+        return
+    slide = prs.slides[slide_idx]
+
+    # 1. Changer la couleur de fond
+    try:
+        bg_pr = slide._element.find('.//' + qn('p:bgPr'))
+        if bg_pr is not None:
+            solid = bg_pr.find(qn('a:solidFill'))
+            if solid is not None:
+                srgb = solid.find(qn('a:srgbClr'))
+                if srgb is not None:
+                    srgb.set('val', primary_hex.lstrip('#').upper())
+    except Exception as e:
+        print(f'Warning: tarifs bg color change failed: {e}')
+
+    if not logo_bytes:
+        return
+
+    # 2. Remplacer le blip dans Freeform 4 (watermark) et Freeform 5 (logo icon)
+    # Même technique que replace_blip : on écrase directement le blob de la relation.
+    for shape_name in ('Freeform 4', 'Freeform 5'):
+        shape = get_shape(slide, shape_name)
+        if shape is None:
+            continue
+        try:
+            sp = shape._element
+            blip = sp.find('.//' + qn('a:blip'))
+            if blip is None:
+                continue
+            rid = blip.get('{%s}embed' % NS_R)
+            if rid:
+                slide.part._rels[rid].target_part._blob = logo_bytes
+            # Supprimer les extensions SVG qui ne s'appliquent pas au nouveau logo
+            ext_lst = blip.find(qn('a:extLst'))
+            if ext_lst is not None:
+                blip.remove(ext_lst)
+        except Exception as e:
+            print(f'Warning: tarifs logo replace failed for {shape_name}: {e}')
+
+
 def _set_shape_solid_fill(shape, hex_color: str):
     """Replace any fill on a shape with a solid color (hex without '#')."""
     from lxml import etree as _etree
@@ -1005,12 +1053,7 @@ def generate_presentation(req: GenerateRequest):
 
     prs = Presentation(base_path)
 
-    # Supprimer slide 9 de Chanel ("La location longue durée") — absente du neutre
-    if base_path == CHANEL_PATH:
-        try:
-            _delete_slide(prs, 9)
-        except Exception as e:
-            print(f"Warning: could not delete extra Chanel slide: {e}")
+    # Toutes les slides Chanel sont conservées (aucune suppression)
 
     # ── Logo de la marque (utilisé cover + strips photo) ─────────────────────
     logo_bytes: Optional[bytes] = None
@@ -1159,10 +1202,20 @@ def generate_presentation(req: GenerateRequest):
     except Exception as e:
         print(f"Warning: _style_photo_strips failed: {e}")
 
+    # ── Slide tarifs (index 12) : fond couleur primaire + logo watermark ──────
+    try:
+        _rebrand_tarifs_slide(
+            prs,
+            slide_idx = 12,
+            primary_hex = _hex(req.primary_color, "1A1A1A"),
+            logo_bytes  = logo_bytes,
+        )
+    except Exception as e:
+        print(f'Warning: _rebrand_tarifs_slide failed: {e}')
+
     # ── Goodies : inject_picture_at_shape sur le groupe (overlay fiable) ─────
-    # Après _delete_slide(prs, 9), l'ancienne slide 10 (Nos goodies) passe à l'index 9.
-    # Chanel template : slides 0-10 → après suppression slide 9 → goodies = index 9.
-    GOODIES_SLIDE = 9
+    # Chanel template : slide index 10 = "Nos goodies" (aucune suppression en amont).
+    GOODIES_SLIDE = 10
     goodies_inject = [
         ("Group 2", req.goodies_top_url),
         ("Group 4", req.goodies_bottom_url),
@@ -1332,11 +1385,7 @@ def preview_slides(req: GenerateRequest):
 
     prs = Presentation(CHANEL_PATH)
 
-    # Même logique que generate_presentation mais sans les zones IA
-    try:
-        _delete_slide(prs, 8)
-    except Exception:
-        pass
+    # Toutes les slides Chanel sont conservées — aucune suppression
 
     # Logo
     logo_bytes: Optional[bytes] = None
@@ -1377,6 +1426,17 @@ def preview_slides(req: GenerateRequest):
         )
     except Exception as e:
         print(f"Preview: _style_photo_strips failed: {e}")
+
+    # Slide tarifs : fond couleur primaire + logo watermark
+    try:
+        _rebrand_tarifs_slide(
+            prs,
+            slide_idx = 12,
+            primary_hex = _hex(req.primary_color, "1A1A1A"),
+            logo_bytes  = logo_bytes,
+        )
+    except Exception as e:
+        print(f'Preview: _rebrand_tarifs_slide failed: {e}')
 
     # Cover
     build_cover(prs, req, logo_bytes)

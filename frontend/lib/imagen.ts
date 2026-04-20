@@ -12,6 +12,8 @@ export interface BrandContext {
   logoUrl?: string | null
   description?: string
   secteur?: string          // ex: "Luxe", "Mode & Fashion", "Tech & Innovation"...
+  venuePrompt?: string      // prompt libre pour l'environnement (cabine ronde + kiosk)
+  kioskPhotoPrompt?: string  // prompt libre pour les 4 photos affichées sur l'écran du kiosk
 }
 
 /**
@@ -23,44 +25,57 @@ export async function generateImage(prompt: string, aspectRatio: "16:9" | "9:16"
   if (!apiKey) throw new Error("GOOGLE_AI_STUDIO_API_KEY not set")
 
   const url = `https://generativelanguage.googleapis.com/v1beta/models/imagen-4.0-fast-generate-001:predict?key=${encodeURIComponent(apiKey)}`
-  const res = await fetch(url, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({
-      instances: [{ prompt }],
-      parameters: { sampleCount: 1, aspectRatio },
-    }),
-  })
 
-  if (!res.ok) {
+  const MAX_RETRIES = 4
+  let lastError: Error | null = null
+  for (let attempt = 0; attempt <= MAX_RETRIES; attempt++) {
+    if (attempt > 0) {
+      const delay = Math.min(2 ** attempt * 1500, 20000) // 3s, 6s, 12s, 20s
+      console.warn(`Imagen retry ${attempt}/${MAX_RETRIES} in ${delay}ms`)
+      await new Promise((r) => setTimeout(r, delay))
+    }
+
+    const res = await fetch(url, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        instances: [{ prompt }],
+        parameters: { sampleCount: 1, aspectRatio },
+      }),
+    })
+
+    if (res.ok) {
+      const json = await res.json()
+      const pred = json.predictions?.[0]
+      const b64: string | undefined =
+        pred?.bytesBase64Encoded ??
+        pred?.image?.bytesBase64Encoded ??
+        pred?.imageBytes?.bytesBase64Encoded
+      if (!b64) throw new Error("Google Imagen: no image returned")
+      return `data:image/png;base64,${b64}`
+    }
+
+    if (res.status === 503 || res.status === 429) {
+      const errText = await res.text()
+      let msg = errText
+      try { const p = JSON.parse(errText); if (p?.error?.message) msg = p.error.message } catch {}
+      lastError = new Error(`Gemini image generation error (${res.status}): ${msg}`)
+      continue // retry
+    }
+
     const errText = await res.text()
     let googleMessage = errText
     try {
       const parsed = JSON.parse(errText)
       if (parsed?.error?.message) googleMessage = String(parsed.error.message)
-    } catch {
-      // keep raw text
-    }
-
-    // Make a few common Google errors more actionable.
+    } catch { /* keep raw text */ }
     if (/only available on paid plans/i.test(googleMessage)) {
-      throw new Error(
-        `Google Imagen access error (${res.status}): ${googleMessage} (Go to https://ai.dev/projects to enable a paid plan / billing for your project.)`
-      )
+      throw new Error(`Google Imagen access error (${res.status}): ${googleMessage} (Go to https://ai.dev/projects to enable billing.)`)
     }
-
     throw new Error(`Google Imagen error (${res.status}): ${googleMessage}`)
   }
 
-  const json = await res.json()
-  const pred = json.predictions?.[0]
-  const b64: string | undefined =
-    pred?.bytesBase64Encoded ??
-    pred?.image?.bytesBase64Encoded ??
-    pred?.imageBytes?.bytesBase64Encoded
-  if (!b64) throw new Error("Google Imagen: no image returned")
-
-  return `data:image/png;base64,${b64}`
+  throw lastError ?? new Error("Google Imagen: max retries exceeded")
 }
 
 /**
@@ -82,51 +97,65 @@ export async function generateImageFromReference(
 
   const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-image:generateContent?key=${encodeURIComponent(apiKey)}`
 
-  const res = await fetch(url, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({
-      contents: [{
-        parts: [
-          {
-            inlineData: {
-              mimeType: "image/jpeg",
-              data: imageBase64,
+  const MAX_RETRIES = 4
+  let lastError: Error | null = null
+  for (let attempt = 0; attempt <= MAX_RETRIES; attempt++) {
+    if (attempt > 0) {
+      const delay = Math.min(2 ** attempt * 1500, 20000)
+      console.warn(`Gemini image-to-image retry ${attempt}/${MAX_RETRIES} in ${delay}ms`)
+      await new Promise((r) => setTimeout(r, delay))
+    }
+
+    const res = await fetch(url, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        contents: [{
+          parts: [
+            {
+              inlineData: {
+                mimeType: "image/jpeg",
+                data: imageBase64,
+              },
             },
-          },
-          { text: prompt },
-        ],
-      }],
-      generationConfig: {
-        responseModalities: ["IMAGE", "TEXT"],
-      },
-    }),
-  })
+            { text: prompt },
+          ],
+        }],
+        generationConfig: {
+          responseModalities: ["IMAGE", "TEXT"],
+        },
+      }),
+    })
 
-  if (!res.ok) {
-    const errText = await res.text()
-    let googleMessage = errText
-    try {
-      const parsed = JSON.parse(errText)
-      if (parsed?.error?.message) googleMessage = String(parsed.error.message)
-    } catch { /* keep raw */ }
-    throw new Error(`Gemini image generation error (${res.status}): ${googleMessage}`)
-  }
+    if (!res.ok) {
+      const errText = await res.text()
+      let googleMessage = errText
+      try {
+        const parsed = JSON.parse(errText)
+        if (parsed?.error?.message) googleMessage = String(parsed.error.message)
+      } catch { /* keep raw */ }
+      lastError = new Error(`Gemini image generation error (${res.status}): ${googleMessage}`)
+      if (res.status === 503 || res.status === 429) continue // retry
+      throw lastError
+    }
 
-  const json = await res.json()
-  // Response parts: find the image part
-  const candidate = json.candidates?.[0]
-  const finishReason = candidate?.finishReason ?? "UNKNOWN"
-  const parts: Array<{ inlineData?: { data: string; mimeType: string }; text?: string }> =
-    candidate?.content?.parts ?? []
-  const imgPart = parts.find((p) => p.inlineData?.mimeType?.startsWith("image/"))
-  if (!imgPart?.inlineData) {
-    const textPart = parts.find((p) => p.text)?.text ?? ""
-    const safetyRatings = JSON.stringify(candidate?.safetyRatings ?? [])
-    throw new Error(`Gemini: no image returned (finishReason=${finishReason}, text="${textPart.slice(0, 200)}", safety=${safetyRatings})`)
-  }
+    const json = await res.json()
+    // Response parts: find the image part
+    const candidate = json.candidates?.[0]
+    const finishReason = candidate?.finishReason ?? "UNKNOWN"
+    const parts: Array<{ inlineData?: { data: string; mimeType: string }; text?: string }> =
+      candidate?.content?.parts ?? []
+    const imgPart = parts.find((p) => p.inlineData?.mimeType?.startsWith("image/"))
+    if (!imgPart?.inlineData) {
+      const textPart = parts.find((p) => p.text)?.text ?? ""
+      const safetyRatings = JSON.stringify(candidate?.safetyRatings ?? [])
+      throw new Error(`Gemini: no image returned (finishReason=${finishReason}, text="${textPart.slice(0, 200)}", safety=${safetyRatings})`)
+    }
 
-  return `data:${imgPart.inlineData.mimeType};base64,${imgPart.inlineData.data}`
+    return `data:${imgPart.inlineData.mimeType};base64,${imgPart.inlineData.data}`
+  } // end for
+
+  throw lastError ?? new Error("Gemini: max retries exceeded")
 }
 
 // ─── Zone-specific prompts ────────────────────────────────────────────────────
@@ -176,6 +205,13 @@ function secteurVenue(brand: BrandContext): string {
   if (s.includes("hermès") || s.includes("hermes"))
     return "a Hermès boutique with warm orange decor, premium leather goods on display and refined Parisian lighting"
 
+  // Water / mineral water brands (check BEFORE generic food/drink to avoid false positives)
+  if (s.includes("evian") || s.includes("volvic") || s.includes("perrier") || s.includes("vittel") || s.includes("badoit") ||
+      s.includes("mineral water") || s.includes("spring water") || s.includes("eau minérale") || s.includes("eau naturelle") ||
+      s.includes("natural mineral water") || s.includes("french alps") || s.includes("eaux") ||
+      (/\bwater\b/.test(s) && (s.includes("mineral") || s.includes("spring") || s.includes("natural") || s.includes("alps"))))
+    return "a bright outdoor alpine festival with snow-capped mountain peaks, fresh blue sky, crystal-clear spring water flowing, lush green Alp meadows and a joyful active crowd in bokeh"
+
   if (s.includes("luxe") || s.includes("luxury") || s.includes("haute couture") || s.includes("maison"))
     return "an opulent palace ballroom with marble floors, gilded mirrors, crystal chandeliers and lush floral arrangements"
   if (s.includes("beaut") || s.includes("cosmetic") || s.includes("skincare") || s.includes("parfum") || s.includes("fragrance"))
@@ -184,7 +220,8 @@ function secteurVenue(brand: BrandContext): string {
     return "a high-fashion runway or Parisian atelier loft with exposed brick, dramatic lighting and clothes racks in soft bokeh"
   if (s.includes("tech") || s.includes("software") || s.includes("digital") || s.includes("saas") || s.includes("startup") || s.includes("cloud"))
     return "a futuristic tech conference hall with LED walls, cool blue and purple uplighting and a sleek industrial feel"
-  if (s.includes("auto") || s.includes("voiture") || s.includes("car") || s.includes("moteur") || s.includes("motor") || s.includes("vehicle"))
+  // Use word boundary for 'car' to avoid false positive on 'carbon', 'scar', 'cartoon'
+  if (s.includes("automobile") || s.includes("voiture") || /\bcar\b/.test(s) || s.includes("moteur") || /\bmotor\b/.test(s) || s.includes("vehicle") || s.includes(" auto ") || s.includes("automotive"))
     return "a sleek automotive showroom with polished concrete floors, dramatic spotlights and a hero car on a rotating platform in bokeh"
   if (s.includes("corporate") || s.includes("consulting") || s.includes("finance") || s.includes("bank") || s.includes("insurance") || s.includes("assur"))
     return "a modern corporate event venue with clean architectural lines, neutral tones, blue accent lighting and branded signage"
@@ -192,7 +229,7 @@ function secteurVenue(brand: BrandContext): string {
     return "an enchanted outdoor wedding reception with fairy lights, lush rose garlands, draped white fabric and candlelit tables"
   if (s.includes("art") || s.includes("culture") || s.includes("museum") || s.includes("galerie") || s.includes("gallery") || s.includes("musée"))
     return "a contemporary art gallery with white walls, track lighting and sculptural installations in soft bokeh"
-  if (s.includes("food") || s.includes("restaurant") || s.includes("boisson") || s.includes("beverage") || s.includes("drink") || s.includes("wine") || s.includes("champagne"))
+  if (s.includes("food") || s.includes("restaurant") || s.includes("boisson") || s.includes("beverage") || s.includes("drink") || s.includes("wine") || s.includes("champagne") || /\bwater\b/.test(s) || s.includes("eau"))
     return "a chic restaurant launch or rooftop cocktail party with warm Edison lights, wooden decor and artisan food displays"
   if (s.includes("sport") || s.includes("fitness") || s.includes("athletic") || s.includes("footwear") || s.includes("running"))
     return "a dynamic sports arena or exclusive athletic brand activation space with bold lighting and energetic crowd in bokeh"
@@ -275,7 +312,7 @@ export function promptCabineRonde(brand: BrandContext): string {
     `Replace any logo, text, or branding on the machine with the "${brand.brandName}" name and logo, large and clearly visible.`,
     brand.description ? `Brand identity: ${brand.description}.` : "",
     brand.secteur ? `Industry: ${brand.secteur}.` : "",
-    `The booth is photographed at a real ${secteurVenue(brand)}. Guests in soft bokeh behind.`,
+    `The booth is photographed at a real ${brand.venuePrompt ?? secteurVenue(brand)}. Guests in soft bokeh behind.`,
     "Keep the exact same machine shape, rounded corners, arch opening, and curtains as in the reference image.",
     "Full machine in frame — head to toe visible, nothing cropped. No people inside the booth.",
   ].filter(Boolean).join(" ")
@@ -410,8 +447,14 @@ function kioskPhotoContent(brand: BrandContext): string {
   if (s.includes("music") || s.includes("streaming") || s.includes("entertainment") || s.includes("media") || s.includes("film") || s.includes("tv") || s.includes("netflix") || s.includes("spotify"))
     return `4 fun photobooth photos of two young friends laughing and making silly faces, vibrant photo strip template with "${brand.brandName}" at the bottom`
 
+  // Water / mineral water brands
+  if (s.includes("evian") || s.includes("volvic") || s.includes("perrier") || s.includes("vittel") || s.includes("badoit") ||
+      s.includes("mineral water") || s.includes("spring water") || s.includes("natural mineral water") || s.includes("french alps") ||
+      (/\bwater\b/.test(s) && (s.includes("mineral") || s.includes("spring") || s.includes("alps"))))
+    return `4 fresh photobooth photos of two smiling young friends at a summer outdoor event, each holding a ${brand.brandName} water bottle, laughing and posing in a fun natural way, light blue photo strip template with "${brand.brandName}" at the bottom`
+
   // Food & drinks
-  if (s.includes("food") || s.includes("restaurant") || s.includes("boisson") || s.includes("beverage") || s.includes("drink") || s.includes("wine") || s.includes("champagne"))
+  if (s.includes("food") || s.includes("restaurant") || s.includes("boisson") || s.includes("beverage") || s.includes("drink") || s.includes("wine") || s.includes("champagne") || /\bwater\b/.test(s) || s.includes("eau"))
     return `4 joyful photobooth photos of two friends clinking glasses and smiling, warm-toned photo strip template with "${brand.brandName}" at the bottom`
 
   // Default — universal photobooth vibe
@@ -433,9 +476,10 @@ export function promptKiosk(brand: BrandContext): string {
 
     `TOP HEADER: replace existing brand name with "${brand.brandName}" in official brand typography, on a ${headerBg}.`,
     `FLASH BAR: the thin horizontal bar just below the header is a camera flash unit — keep it solid BLACK, no text.`,
-    `MACHINE BODY: repaint the exterior in ${exteriorColor}. Remove all existing text and logos from the body.`,
-    `SCREEN PANEL: show a 2×2 grid of ${photos}. At the bottom of the grid, show "${brand.brandName}" in a clean white photo strip template.`,
-    `BACKGROUND: place the kiosk in ${venue}, realistic lighting, soft bokeh. The background must look like ${venue}.`,
+    `MACHINE BODY: repaint the entire exterior in ${exteriorColor}. CRITICAL — erase EVERY occurrence of the text "Jimmy Fairly" on the machine: top header, bottom footer strip, side panels, anywhere. Replace every instance with "${brand.brandName}" in clean brand typography. No trace of "Jimmy Fairly" must remain anywhere on the kiosk.`,
+    `BOTTOM FOOTER: the strip at the very base of the kiosk that reads "Jimmy Fairly" must be fully replaced with "${brand.brandName}" in large, centered, clean typography.`,
+    `SCREEN PANEL: IMPORTANT — the reference screen shows people trying on eyeglasses. Completely erase this content and replace it entirely with: a 2×2 grid of ${brand.kioskPhotoPrompt ?? photos}. At the bottom of the screen grid, show "${brand.brandName}" in a clean white photo strip template. Do NOT show any glasses, eyewear, or optician content.`,
+    `BACKGROUND: place the kiosk in ${brand.venuePrompt ?? venue}, realistic lighting, soft bokeh. The background must look like ${brand.venuePrompt ?? venue}. Do NOT use a store interior or showroom unrelated to the brand.`,
 
     `Keep the full kiosk in frame (top to floor). Editorial product photography.`,
     brand.description ? `Brand: ${brand.description}.` : "",
@@ -451,8 +495,8 @@ export async function generateKiosk(brand: BrandContext): Promise<string> {
     console.warn("Gemini kiosk refused, retrying with simplified prompt:", err)
     const simple = [
       `Using this reference image for the kiosk SHAPE ONLY, create a photobooth kiosk for brand "${brand.brandName}".`,
-      `DO NOT keep: the store background, the glasses/eyewear products, the "Jimmy Fairly" text, or the people wearing glasses in the screen photos.`,
-      `REPLACE WITH: background = ${secteurVenue(brand)}. Screen = 4 photos of two happy people smiling and posing. Header text = "${brand.brandName}".`,
+      `DO NOT keep: the store background, the glasses/eyewear products, the "Jimmy Fairly" text anywhere (top, bottom, sides), or the people wearing glasses in the screen photos.`,
+      `REPLACE WITH: background = ${brand.venuePrompt ?? secteurVenue(brand)}. Screen = 4 photos of ${brand.kioskPhotoPrompt ?? "two happy people smiling and posing"}. All text on the kiosk = "${brand.brandName}" only — header AND bottom footer strip.`,
       brand.primaryColor ? `Machine exterior color: ${brand.primaryColor}.` : "",
       `Keep only the kiosk shape and proportions from the reference.`,
     ].filter(Boolean).join(" ")

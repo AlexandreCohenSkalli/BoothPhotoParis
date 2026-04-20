@@ -77,6 +77,20 @@ export async function GET(req: NextRequest) {
       type: c.type,
     }))
 
+    // Helper: compute HSL saturation of a hex color (0–1)
+    const hexSaturation = (hex: string): number => {
+      const h = hex.replace("#", "").toLowerCase()
+      if (h.length !== 6) return 0
+      const r = parseInt(h.slice(0, 2), 16) / 255
+      const g = parseInt(h.slice(2, 4), 16) / 255
+      const b = parseInt(h.slice(4, 6), 16) / 255
+      const max = Math.max(r, g, b)
+      const min = Math.min(r, g, b)
+      const l = (max + min) / 2
+      if (max === min) return 0
+      return (max - min) / (1 - Math.abs(2 * l - 1))
+    }
+
     // Helper: skip near-white or near-transparent colors for primary
     const isUsableAsPrimary = (hex: string) => {
       const h = hex.replace("#", "").toLowerCase()
@@ -85,10 +99,40 @@ export async function GET(req: NextRequest) {
       const g = parseInt(h.slice(2, 4), 16)
       const b = parseInt(h.slice(4, 6), 16)
       const luminance = (r + g + b) / 3
-      return luminance < 230 // exclude near-white (#E5E5E5 = 229 → excluded)
+      return luminance < 230 // exclude near-white
     }
 
+    // Known-brand color overrides: Brandfetch sometimes returns generic dark/neutral colors
+    // for brands whose real identity color is well-known. Override when confident.
+    const knownColors: Record<string, { primary: string; secondary?: string }> = {
+      "evian.com":      { primary: "#00A0DC", secondary: "#ffffff" },
+      "volvic.fr":      { primary: "#005B96", secondary: "#ffffff" },
+      "perrier.com":    { primary: "#00833D", secondary: "#ffffff" },
+      "vittel.com":     { primary: "#009A44", secondary: "#ffffff" },
+      "redbull.com":    { primary: "#CC1E10", secondary: "#FFC906" },
+      "heineken.com":   { primary: "#007A33", secondary: "#ffffff" },
+      "corona.com":     { primary: "#F2A900", secondary: "#003087" },
+      "orangina.com":   { primary: "#F7941D", secondary: "#ffffff" },
+    }
+    const knownOverride = knownColors[cleanDomain]
+
+    // Prefer the most chromatic (saturated) usable color — avoids picking generic dark/gray
+    // Use a looser luminance filter (< 245) for the chromaticity check to catch light brand colors
+    const isChromatic = (hex: string): boolean => {
+      const h = hex.replace("#", "").toLowerCase()
+      if (h.length !== 6) return false
+      const r = parseInt(h.slice(0, 2), 16)
+      const g = parseInt(h.slice(2, 4), 16)
+      const b = parseInt(h.slice(4, 6), 16)
+      return (r + g + b) / 3 < 245 // exclude pure white only
+    }
+    const usableColors = colors.filter((c: { hex: string; type: string }) => isChromatic(c.hex))
+    const mostChromatic = usableColors.sort((a: { hex: string }, b: { hex: string }) =>
+      hexSaturation(b.hex) - hexSaturation(a.hex)
+    )[0]
+
     const primaryColor =
+      (mostChromatic && hexSaturation(mostChromatic.hex) > 0.15 ? mostChromatic.hex : null) ??
       colors.find((c: { hex: string; type: string }) => c.type === "dark" && isUsableAsPrimary(c.hex))?.hex ??
       colors.find((c: { hex: string; type: string }) => c.type === "dominant" && isUsableAsPrimary(c.hex))?.hex ??
       colors.find((c: { hex: string; type: string }) => c.type === "brand" && isUsableAsPrimary(c.hex))?.hex ??
@@ -108,8 +152,8 @@ export async function GET(req: NextRequest) {
       description: data.description ?? "",
       logo_url: bestLogo?.url ?? null,
       logo_icon_url: bestIcon?.url ?? null,
-      primary_color: primaryColor,
-      secondary_color: secondaryColor,
+      primary_color: knownOverride?.primary ?? primaryColor,
+      secondary_color: knownOverride?.secondary ?? secondaryColor,
       all_colors: colors,
       all_logos: logos,
     })

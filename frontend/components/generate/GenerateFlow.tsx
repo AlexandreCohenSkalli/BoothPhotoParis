@@ -6,6 +6,7 @@ import { createClient } from "@/lib/supabase/client"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
+import { Textarea } from "@/components/ui/textarea"
 import { Card, CardContent } from "@/components/ui/card"
 import { useToast } from "@/hooks/use-toast"
 import {
@@ -55,7 +56,8 @@ export default function GenerateFlow() {
   const [pptxUrl, setPptxUrl] = useState<string | null>(null)
   const [pptxFilename, setPptxFilename] = useState("")
   const [coverStyle, setCoverStyle] = useState<"brand" | "split" | "minimal">("brand")
-  const [stripStyle, setStripStyle] = useState<"primary" | "secondary" | "none">("none")
+  const [venuePrompt, setVenuePrompt] = useState("")
+  const [kioskPhotoPrompt, setKioskPhotoPrompt] = useState("")
   const [previewSlides, setPreviewSlides] = useState<(string | null)[] | null>(null)
   const [slideIndex, setSlideIndex]     = useState(0)
   const [previewing, setPreviewing]     = useState(false)
@@ -148,6 +150,8 @@ export default function GenerateFlow() {
           logo_url: brand.logo_url,
           description: brand.description,
           secteur: brand.secteur,
+          venue_prompt: venuePrompt.trim() || undefined,
+          kiosk_photo_prompt: kioskPhotoPrompt.trim() || undefined,
         }),
       })
 
@@ -190,7 +194,7 @@ export default function GenerateFlow() {
           logo_icon_url: brand.logo_icon_url,
           description: brand.description,
           cover_style: coverStyle,
-          strip_style: stripStyle,
+          strip_style: "none",
           zones,
         }),
       })
@@ -233,7 +237,8 @@ export default function GenerateFlow() {
     setZones(null)
     setGeneratingZone(0)
     setCoverStyle("brand")
-    setStripStyle("none")
+    setVenuePrompt("")
+    setKioskPhotoPrompt("")
     setPreviewSlides(null)
     setSlideIndex(0)
   }
@@ -468,60 +473,38 @@ export default function GenerateFlow() {
                 </div>
               </div>
 
-              {/* ── Strip style picker ── */}
+              {/* ── Venue prompt ── */}
               <div className="space-y-3">
                 <p className="text-xs font-medium text-muted-foreground uppercase tracking-wider">
-                  Contour bandes photo
+                  Environnement — cabine arrondie &amp; kiosk
                 </p>
-                <div className="grid grid-cols-3 gap-3">
-                  {([
-                    { value: "none"      as const, label: "Aucun",      desc: "Chanel (défaut)" },
-                    { value: "primary"   as const, label: "Primaire",   desc: "Épais, couleur marque" },
-                    { value: "secondary" as const, label: "Secondaire", desc: "Fin, couleur secondaire" },
-                  ]).map((opt) => {
-                    const color = opt.value === "primary"
-                      ? (brand.primary_color || "#111111")
-                      : opt.value === "secondary"
-                        ? (brand.secondary_color || "#F5F3EE")
-                        : "transparent"
-                    const borderW = opt.value === "primary" ? 3 : opt.value === "secondary" ? 1.5 : 0
-                    return (
-                      <button
-                        key={opt.value}
-                        onClick={() => setStripStyle(opt.value)}
-                        className={cn(
-                          "flex flex-col items-center gap-2 p-2 rounded-xl border-2 transition-all focus:outline-none",
-                          stripStyle === opt.value
-                            ? "border-gold shadow-md scale-[1.02]"
-                            : "border-border hover:border-muted-foreground/40"
-                        )}
-                      >
-                        {/* Mini aperçu bande photo */}
-                        <div
-                          className="w-10 rounded overflow-hidden bg-muted"
-                          style={{
-                            aspectRatio: "9/16",
-                            outline: borderW > 0 ? `${borderW}px solid ${color}` : "none",
-                            outlineOffset: "-1px",
-                          }}
-                        >
-                          {/* Simulation de 4 photos */}
-                          <div className="w-full h-full grid grid-cols-2 gap-[1px] p-[2px] bg-black">
-                            {[0,1,2,3].map(i => (
-                              <div key={i} className="bg-muted-foreground/30 rounded-[1px]" />
-                            ))}
-                          </div>
-                        </div>
-                        <p className={cn(
-                          "text-[11px] font-medium text-center leading-tight transition-colors",
-                          stripStyle === opt.value ? "text-gold" : "text-muted-foreground"
-                        )}>
-                          {opt.label}
-                        </p>
-                      </button>
-                    )
-                  })}
-                </div>
+                <Textarea
+                  placeholder="Ex. : salon de luxe parisien avec dorures et lumière tamisée, fond crème…"
+                  value={venuePrompt}
+                  onChange={(e) => setVenuePrompt(e.target.value)}
+                  rows={3}
+                  className="resize-none text-sm"
+                />
+                <p className="text-[11px] text-muted-foreground">
+                  Laisse vide pour laisser l&apos;IA choisir selon le secteur de la marque.
+                </p>
+              </div>
+
+              {/* ── Kiosk photo prompt ── */}
+              <div className="space-y-3">
+                <p className="text-xs font-medium text-muted-foreground uppercase tracking-wider">
+                  Photos écran kiosk
+                </p>
+                <Textarea
+                  placeholder="Ex. : 4 photos d'amis qui rient autour d'une bouteille Evian, tenue d'été…"
+                  value={kioskPhotoPrompt}
+                  onChange={(e) => setKioskPhotoPrompt(e.target.value)}
+                  rows={3}
+                  className="resize-none text-sm"
+                />
+                <p className="text-[11px] text-muted-foreground">
+                  Décris les 4 photos affichées sur l&apos;écran du kiosk. Laisse vide pour l&apos;auto.
+                </p>
               </div>
 
               <div className="bg-muted/50 rounded-lg p-3 space-y-1">
